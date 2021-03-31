@@ -4,47 +4,7 @@ import numpy as np
 from scipy.optimize import minimize
 import ebisu
 
-from typing import Callable, TypeVar
-from collections.abc import Iterable
-T = TypeVar('T')
-
-
-def split_by(split_pred: Callable[[T, list[T]], bool],
-             lst: Iterable[T]) -> list[list[T]]:
-    "Allows each element to decide if it wants to be in previous partition"
-    lst = iter(lst)
-    try:
-        x = next(lst)
-    except StopIteration:  # empty iterable (list, zip, etc.)
-        return []
-    ret: list[list[T]] = []
-    ret.append([x])
-    for x in lst:
-        if split_pred(x, ret[-1]):
-            ret.append([x])
-        else:
-            ret[-1].append(x)
-    return ret
-
-
-def partition_by(f: Callable[[T], bool], lst: Iterable[T]) -> list[list[T]]:
-    "See https://clojuredocs.org/clojure.core/partition-by"
-    lst = iter(lst)
-    try:
-        x = next(lst)
-    except StopIteration:  # empty iterable (list, zip, etc.)
-        return []
-    ret: list[list[T]] = []
-    ret.append([x])
-    y = f(x)
-    for x in lst:
-        newy = f(x)
-        if y == newy:
-            ret[-1].append(x)
-        else:
-            ret.append([x])
-        y = newy
-    return ret
+from utils import split_by, partition_by
 
 
 def likelihood(initialModel, tnows, results):
@@ -83,7 +43,9 @@ def dfToLielihood(df, default_a):
             ret.extend([split[-1] for split in splits])
     tnows_hours, results = zip(*ret)
     hl = np.logspace(1, 5)
-    lik = [likelihood([default_a,default_a, h], tnows_hours, results) for h in hl]
+    lik = [
+        likelihood([default_a, default_a, h], tnows_hours, results) for h in hl
+    ]
     best_hl = hl[np.argmax(lik)]
     return best_hl, hl, lik, g
 
@@ -101,7 +63,9 @@ for cardId, group in tqdm(cardId_group):
     if failrate == 0: continue
     best_hl, hl, lik, gdf = dfToLielihood(group, 2.)
     results.append(
-        dict(cardId=cardId, best_hl=best_hl, failrate=(gdf.ease.iloc[1:]<=1).mean(),
+        dict(cardId=cardId,
+             best_hl=best_hl,
+             failrate=(gdf.ease.iloc[1:] <= 1).mean(),
              tot=len(gdf)))
 rdf = pd.DataFrame(results).sort_values('best_hl')
 
@@ -111,8 +75,8 @@ plt.ion()
 rdf.plot.scatter(x='failrate', y='best_hl')
 plt.gca().set_yscale('log')
 
-best_hl, hl, lik, g = dfToLielihood(df[df.cardId == 1300038030580.0],4)
-best_hl, hl, lik, g = dfToLielihood(df[df.cardId == 1300038030510.0],32)
+best_hl, hl, lik, g = dfToLielihood(df[df.cardId == 1300038030580.0], 4)
+best_hl, hl, lik, g = dfToLielihood(df[df.cardId == 1300038030510.0], 32)
 
 plt.figure()
 plt.semilogx(hl, lik)
