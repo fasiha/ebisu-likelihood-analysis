@@ -42,42 +42,50 @@ def dfToLielihood(df, default_a):
             # Then for each group of timed-clusters, pick the last one
             ret.extend([split[-1] for split in splits])
     tnows_hours, results = zip(*ret)
+
+    tnows_hours = np.diff(tnows_hours)
+    results = results[1:]
+
     hl = np.logspace(1, 5)
     lik = [
         likelihood([default_a, default_a, h], tnows_hours, results) for h in hl
     ]
     best_hl = hl[np.argmax(lik)]
-    return best_hl, hl, lik, g
+    return best_hl, hl, lik, g, tnows_hours, results
 
 
-df = pd.read_csv("fuzzy-anki.csv", parse_dates=True)
-# via https://stackoverflow.com/a/31905585
-df['timestamp'] = df.dateString.map(
-    lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
+if __name__ == '__main__':
+    df = pd.read_csv("fuzzy-anki.csv", parse_dates=True)
+    # via https://stackoverflow.com/a/31905585
+    df['timestamp'] = df.dateString.map(
+        lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
 
-results = []
-cardId_group = df.groupby('cardId')
-from tqdm import tqdm
-for cardId, group in tqdm(cardId_group):
-    failrate = (group.ease <= 1).sum() / len(group)
-    if failrate == 0: continue
-    best_hl, hl, lik, gdf = dfToLielihood(group, 2.)
-    results.append(
-        dict(cardId=cardId,
-             best_hl=best_hl,
-             failrate=(gdf.ease.iloc[1:] <= 1).mean(),
-             tot=len(gdf)))
-rdf = pd.DataFrame(results).sort_values('best_hl')
+    import pylab as plt
+    plt.ion()
 
-import pylab as plt
-plt.ion()
+    if 0 == 1:
+        results = []
+        cardId_group = df.groupby('cardId')
+        from tqdm import tqdm
+        for cardId, group in tqdm(cardId_group):
+            failrate = (group.ease <= 1).sum() / len(group)
+            if failrate == 0: continue
+            best_hl, hl, lik, gdf = dfToLielihood(group, 2.)
+            results.append(
+                dict(cardId=cardId,
+                     best_hl=best_hl,
+                     failrate=(gdf.ease.iloc[1:] <= 1).mean(),
+                     tot=len(gdf)))
+        rdf = pd.DataFrame(results).sort_values('best_hl')
 
-rdf.plot.scatter(x='failrate', y='best_hl')
-plt.gca().set_yscale('log')
+        rdf.plot.scatter(x='failrate', y='best_hl')
+        plt.gca().set_yscale('log')
 
-best_hl, hl, lik, g = dfToLielihood(df[df.cardId == 1300038030580.0], 4)
-best_hl, hl, lik, g = dfToLielihood(df[df.cardId == 1300038030510.0], 32)
+    cid = 1300038030580.0  # 90% pass rate, 30 quizzes
+    cid = 1300038030510.0  # 85% pass rate, 20 quizzes
+    best_hl, hl, lik, g, tnows_hours, results = dfToLielihood(
+        df[df.cardId == cid], 2)
 
-plt.figure()
-plt.semilogx(hl, lik)
-plt.grid()
+    plt.figure()
+    plt.semilogx(hl, lik)
+    plt.grid()
