@@ -6,15 +6,15 @@ data {
     vector[T] time;
 }
 parameters {
-    real<lower=0> learnRate;
+    // real<lower=0> learnRate;
     real<lower=0> initHl;
 }
 transformed parameters {
-    vector[T] hl = initHl * exp(learnRate * time);
+    vector[T] hl = initHl * exp(.001 * time);
 }
 model {
-    learnRate ~ exponential(2000);
-    initHl ~ gamma(3, 0.5);
+    // learnRate ~ exponential(2000);
+    initHl ~ normal(20, 20);
 
     for (t in 1:T)
         quiz[t] ~ bernoulli(exp(-delta[t] / hl[t]));
@@ -42,6 +42,10 @@ data = {"T": N, "time": t, "delta": delta, "quiz": quiz}
 posterior = stan.build(model, data=data, random_seed=1)
 fit = posterior.sample(num_chains=4, num_samples=1000)
 
-# import pylab as plt
-# plt.ion()
-# plt.plot(t, hl, '.')
+import pylab as plt
+plt.ion()
+plt.figure()
+plt.plot(t, hl, '.')
+
+plt.figure()
+plt.hist(fit['initHl'].ravel(), 30)
