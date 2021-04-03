@@ -115,10 +115,8 @@ for cardId, group in cardId_group:
     times.append(np.sum(deltas) / 24 / 365 * 12)
     cids.append(cardId)
 
-import seaborn as sns
-
 summary = pd.DataFrame(zip(cids, lens, passRates, times),
                        columns='cardid,len,passRate,months'.split(','))
-sns.pairplot(summary[summary.columns[1:]])
+p = pd.plotting.scatter_matrix(summary[summary.columns[1:]])
 
 [fitCardid(df, c) for c in summary[summary['len'] > 40]['cardid']]
