@@ -6,14 +6,14 @@ data {
     vector[T] time;
 }
 parameters {
-    // real<lower=0> learnRate;
+    real<lower=0> learnRate;
     real<lower=0> initHl;
 }
 transformed parameters {
-    vector[T] hl = initHl * exp(.001 * time);
+    vector[T] hl = initHl * exp(learnRate / 1000 * time);
 }
 model {
-    // learnRate ~ exponential(2000);
+    learnRate ~ exponential(1.5);
     initHl ~ normal(20, 20);
 
     for (t in 1:T)
@@ -44,8 +44,8 @@ fit = posterior.sample(num_chains=4, num_samples=1000)
 
 import pylab as plt
 plt.ion()
-plt.figure()
-plt.plot(t, hl, '.')
 
-plt.figure()
-plt.hist(fit['initHl'].ravel(), 30)
+fig, axs = plt.subplots(3)
+axs[0].plot(t, hl, '.')
+axs[1].hist(fit['initHl'].ravel(), 30)
+axs[2].hist(fit['learnRate'].ravel(), 30)
