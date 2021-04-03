@@ -52,6 +52,7 @@ df['timestamp'] = df.dateString.map(
 cid = 1300038030580.0  # 90% pass rate, 30 quizzes
 cid = 1300038030510.0  # 85% pass rate, 20 quizzes
 tnows_hours, results = dfToLielihood(df[df.cardId == cid], 2)
+t = np.cumsum(tnows_hours)
 
 with open('model.stan', 'r') as fid:
     model = fid.read()
@@ -60,7 +61,24 @@ import stan
 data = {
     "T": len(tnows_hours),
     "quiz": [int(x) for x in results],
-    "delta": tnows_hours
+    "delta": tnows_hours,
+    "time": t
 }
 posterior = stan.build(model, data=data, random_seed=1)
-fit = posterior.sample(num_chains=4, num_samples=1000)
+fit = posterior.sample(num_chains=4, num_samples=10_000)
+
+import pylab as plt
+plt.ion()
+
+fig, axs = plt.subplots(2, 2)
+axs[0, 0].plot(fit['initHl'].T, fit['learnRate'].T, '.')
+axs[0, 0].set_xlabel('init halflife')
+axs[0, 0].set_ylabel('learnRate')
+
+axs[1, 0].hist(fit['initHl'].ravel(), 30)
+axs[1, 0].set_xlabel('init halflife')
+
+axs[0, 1].hist(fit['learnRate'].ravel(), 30, orientation='horizontal')
+axs[0, 1].set_ylabel('learnRate')
+
+plt.tight_layout()
