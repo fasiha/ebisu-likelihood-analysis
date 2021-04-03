@@ -1,3 +1,4 @@
+import stan
 from email.utils import parsedate_tz, mktime_tz
 import pandas as pd
 import numpy as np
@@ -16,7 +17,7 @@ def fails(df):
     # print(np.sort(list(cardIdToFailrate.values())))
 
 
-def dfToLielihood(df, default_a):
+def dfToVariables(df):
     g = df.copy().sort_values('timestamp')
     g.timestamp -= g.iloc[0].timestamp
     hour_per_second = 1 / 3600
@@ -44,41 +45,59 @@ def dfToLielihood(df, default_a):
     return tnows_hours, results
 
 
+def fitVariables(deltas, results, viz=False, msg=''):
+    t = np.cumsum(deltas)
+    data = {
+        "T": len(results),
+        "quiz": [int(x) for x in results],
+        "delta": deltas,
+        "time": t
+    }
+
+    model = open('model.stan', 'r').read()
+    posterior = stan.build(model, data=data, random_seed=1)
+    fit = posterior.sample(num_chains=4, num_samples=10_000)
+
+    if viz:
+        import pylab as plt
+        plt.ion()
+
+        fig, axs = plt.subplots(2, 2)
+        axs[0, 0].hist2d(fit['initHl'].ravel(),
+                         fit['learnRate'].ravel(),
+                         bins=30)
+        axs[0, 0].set_xlabel('init halflife')
+        axs[0, 0].set_ylabel('learnRate')
+
+        axs[1, 0].hist(fit['initHl'].ravel(), 30)
+        axs[1, 0].set_xlabel('init halflife')
+
+        axs[0, 1].hist(fit['learnRate'].ravel(), 30, orientation='horizontal')
+        axs[0, 1].set_ylabel('learnRate')
+
+        if len(msg):
+            fig.suptitle(msg)
+
+        plt.tight_layout()
+
+
+def fitCardid(df, cid):
+    deltas, results = dfToVariables(df[df.cardId == cid])
+    months = sum(deltas) / 24 / 365 * 12
+    percentRight = 100 * np.mean(results)
+    fitVariables(
+        deltas,
+        results,
+        viz=True,
+        msg=
+        f'card {int(cid)}: {len(results)} quizzes, {percentRight:3}%, {months:.1f} months'
+    )
+
+
 df = pd.read_csv("fuzzy-anki.csv", parse_dates=True)
 # via https://stackoverflow.com/a/31905585
 df['timestamp'] = df.dateString.map(
     lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
 
-cid = 1300038030580.0  # 90% pass rate, 30 quizzes
-cid = 1300038030510.0  # 85% pass rate, 20 quizzes
-tnows_hours, results = dfToLielihood(df[df.cardId == cid], 2)
-t = np.cumsum(tnows_hours)
-
-with open('model.stan', 'r') as fid:
-    model = fid.read()
-
-import stan
-data = {
-    "T": len(tnows_hours),
-    "quiz": [int(x) for x in results],
-    "delta": tnows_hours,
-    "time": t
-}
-posterior = stan.build(model, data=data, random_seed=1)
-fit = posterior.sample(num_chains=4, num_samples=10_000)
-
-import pylab as plt
-plt.ion()
-
-fig, axs = plt.subplots(2, 2)
-axs[0, 0].plot(fit['initHl'].T, fit['learnRate'].T, '.')
-axs[0, 0].set_xlabel('init halflife')
-axs[0, 0].set_ylabel('learnRate')
-
-axs[1, 0].hist(fit['initHl'].ravel(), 30)
-axs[1, 0].set_xlabel('init halflife')
-
-axs[0, 1].hist(fit['learnRate'].ravel(), 30, orientation='horizontal')
-axs[0, 1].set_ylabel('learnRate')
-
-plt.tight_layout()
+fitCardid(df, 1300038030510.0)  # 85% pass rate, 20 quizzes
+fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes
