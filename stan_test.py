@@ -90,7 +90,7 @@ def fitCardid(df, cid):
         results,
         viz=True,
         msg=
-        f'card {int(cid)}: {len(results)} quizzes, {percentRight:3}%, {months:.1f} months'
+        f'card {int(cid)}: {len(results)} quizzes, {percentRight:.3}%, {months:.1f} months'
     )
 
 
@@ -99,5 +99,26 @@ df = pd.read_csv("fuzzy-anki.csv", parse_dates=True)
 df['timestamp'] = df.dateString.map(
     lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
 
-fitCardid(df, 1300038030510.0)  # 85% pass rate, 20 quizzes
-fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes
+# fitCardid(df, 1300038030510.0)  # 85% pass rate, 20 quizzes
+# fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes
+
+cardId_group = df.groupby('cardId')
+cids = []
+lens = []
+passRates = []
+times = []
+for cardId, group in cardId_group:
+    if len(group) < 4: continue
+    deltas, results = dfToVariables(group)
+    passRates.append(np.mean(results))
+    lens.append(len(group))
+    times.append(np.sum(deltas) / 24 / 365 * 12)
+    cids.append(cardId)
+
+import seaborn as sns
+
+summary = pd.DataFrame(zip(cids, lens, passRates, times),
+                       columns='cardid,len,passRate,months'.split(','))
+sns.pairplot(summary[summary.columns[1:]])
+
+[fitCardid(df, c) for c in summary[summary['len'] > 40]['cardid']]
