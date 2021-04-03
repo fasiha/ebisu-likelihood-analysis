@@ -1,3 +1,6 @@
+import pylab as plt
+plt.ion()
+
 model = r"""
 data {
     int<lower=0> N;
@@ -12,7 +15,8 @@ parameters {
     real<lower=0> sigma;
 }
 model {
-  y ~ normal(minval + (maxval - minval) * inv_logit(steepness * (x - mid)), sigma);
+  y ~ normal(minval + (maxval - minval) * inv_logit(steepness * 1e-3 * (x - mid)), sigma);
+  steepness ~ normal(6, 20);
   sigma ~ normal(0, 10);
 }
 """
@@ -22,20 +26,15 @@ import numpy as np
 from scipy.special import expit
 minval = -2
 maxval = 3.5
-mid = -2
-steepness = 0.5
+mid = 0.3 * 365 * 24
+# derivative (slope) at midpoint: steepness / 4
+steepness = 5 / (0.5 * 365 * 24)
 sigma = 0.1 / 5
 
-width = 30
-
-x = np.sort(np.random.rand(100) * width - width / 2)
+x = np.linspace(0, 2 * 365 * 24)
 y = minval + (maxval - minval) * expit(
     steepness * (x - mid)) + np.random.randn(len(x)) * sigma
 
-import pylab as plt
-plt.ion()
-
-plt.figure()
 plt.plot(x, y)
 
 data = {"N": len(x), "x": x, "y": y}
