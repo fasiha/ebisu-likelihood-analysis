@@ -2,8 +2,6 @@ import stan
 from email.utils import parsedate_tz, mktime_tz
 import pandas as pd
 import numpy as np
-from scipy.optimize import minimize
-import ebisu
 from utils import split_by, partition_by
 
 
@@ -57,38 +55,34 @@ def fitVariables(deltas, results, viz=False, msg=''):
     model = open('model.stan', 'r').read()
     posterior = stan.build(model, data=data, random_seed=1)
     fit = posterior.sample(num_chains=4, num_samples=10_000)
+    print(fit)
+    fitdf = fit.to_frame()
+    fitdf = fitdf[[
+        c for c in fitdf.columns if not c.endswith("_") and "." not in c
+    ]]
 
     if viz:
         import pylab as plt
         plt.ion()
 
-        fig, axs = plt.subplots(2, 2)
-        axs[0, 0].hist2d(fit['initHl'].ravel(),
-                         fit['learnRate'].ravel(),
-                         bins=30)
-        axs[0, 0].set_xlabel('init halflife')
-        axs[0, 0].set_ylabel('learnRate')
-
-        axs[1, 0].hist(fit['initHl'].ravel(), 30)
-        axs[1, 0].set_xlabel('init halflife')
-
-        axs[0, 1].hist(fit['learnRate'].ravel(), 30, orientation='horizontal')
-        axs[0, 1].set_ylabel('learnRate')
+        import pandas as pd
+        p = pd.plotting.scatter_matrix(fitdf)
 
         if len(msg):
-            fig.suptitle(msg)
+            p[0, 0].get_figure().suptitle(msg)
 
-        plt.tight_layout()
+        p[0, 0].get_figure().set_tight_layout(True)
+    return fitdf, fit
 
 
-def fitCardid(df, cid):
+def fitCardid(df, cid, viz=True):
     deltas, results = dfToVariables(df[df.cardId == cid])
     months = sum(deltas) / 24 / 365 * 12
     percentRight = 100 * np.mean(results)
-    fitVariables(
+    return fitVariables(
         deltas,
         results,
-        viz=True,
+        viz=viz,
         msg=
         f'card {int(cid)}: {len(results)} quizzes, {percentRight:.3}%, {months:.1f} months'
     )
@@ -99,24 +93,29 @@ df = pd.read_csv("fuzzy-anki.csv", parse_dates=True)
 df['timestamp'] = df.dateString.map(
     lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
 
-# fitCardid(df, 1300038030510.0)  # 85% pass rate, 20 quizzes
+# fitdf, fit = fitCardid(df, 1300038030510.0)  # 85% pass rate, 20 quizzes
 # fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes
 
-cardId_group = df.groupby('cardId')
-cids = []
-lens = []
-passRates = []
-times = []
-for cardId, group in cardId_group:
-    if len(group) < 4: continue
-    deltas, results = dfToVariables(group)
-    passRates.append(np.mean(results))
-    lens.append(len(group))
-    times.append(np.sum(deltas) / 24 / 365 * 12)
-    cids.append(cardId)
 
-summary = pd.DataFrame(zip(cids, lens, passRates, times),
-                       columns='cardid,len,passRate,months'.split(','))
-p = pd.plotting.scatter_matrix(summary[summary.columns[1:]])
+def analyzeDf(df):
+    cardId_group = df.groupby('cardId')
+    cids = []
+    lens = []
+    passRates = []
+    times = []
+    for cardId, group in cardId_group:
+        if len(group) < 4: continue
+        deltas, results = dfToVariables(group)
+        passRates.append(np.mean(results))
+        lens.append(len(group))
+        times.append(np.sum(deltas) / 24 / 365 * 12)
+        cids.append(cardId)
 
+    summary = pd.DataFrame(zip(cids, lens, passRates, times),
+                           columns='cardid,len,passRate,months'.split(','))
+    pd.plotting.scatter_matrix(summary[summary.columns[1:]])
+    return summary
+
+
+summary = analyzeDf(df)
 [fitCardid(df, c) for c in summary[summary['len'] > 40]['cardid']]
