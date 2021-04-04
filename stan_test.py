@@ -55,16 +55,16 @@ def fitVariables(deltas, results, viz=False, msg=''):
     fit = posterior.sample(num_chains=4, num_samples=10_000)
     print(fit)
     fitdf = fit.to_frame()
-    fitdf = fitdf[[
-        c for c in fitdf.columns if not c.endswith("_") and "." not in c
-    ]]
+    fitdf = fitdf[[c for c in fitdf.columns if not c.endswith("_")]]
 
     if viz:
         import pylab as plt
         plt.ion()
 
         import pandas as pd
-        p = pd.plotting.scatter_matrix(fitdf)
+        dfplot = fitdf[[c for c in fitdf.columns if "." not in c]]
+
+        p = pd.plotting.scatter_matrix(dfplot)
 
         if len(msg):
             p[0, 0].get_figure().suptitle(msg)
@@ -91,7 +91,25 @@ df = pd.read_csv("fuzzy-anki.csv", parse_dates=True)
 df['timestamp'] = df.dateString.map(
     lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
 
-# fitdf, fit = fitCardid(df, 1300038030510.0)  # 85% pass rate, 20 quizzes
+
+def demo():
+    model = open('model.stan', 'r').read()
+    posterior = stan.build(model,
+                           data={
+                               "T": 4,
+                               "quiz": [1, 1, 0, 1],
+                               "delta": [50, 50, 100, 100]
+                           },
+                           random_seed=1)
+    fit = posterior.sample(num_chains=4, num_samples=10_000)
+    fitdf = fit.to_frame()
+    fitdf = fitdf[[c for c in fitdf.columns if not c.endswith("_")]]
+
+
+# 85% pass rate, 20 quizzes
+fitdf, fit = fitCardid(df, 1300038030510.0, viz=False)
+deltas, results = dfToVariables(df[df.cardId == 1300038030510.0])
+
 # fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes
 
 
@@ -115,5 +133,5 @@ def analyzeDf(df):
     return summary
 
 
-summary = analyzeDf(df)
-[fitCardid(df, c) for c in summary[summary['len'] > 40]['cardid']]
+# summary = analyzeDf(df)
+# [fitCardid(df, c) for c in summary[summary['len'] > 40]['cardid']]
