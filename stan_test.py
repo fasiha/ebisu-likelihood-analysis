@@ -20,12 +20,13 @@ def dfToVariables(df):
     g.timestamp -= g.iloc[0].timestamp
     hour_per_second = 1 / 3600
     # drop the first
-    tnows_hours = g.timestamp.values[1:] * hour_per_second
+    tnows_hours = np.diff(g.timestamp.values) * hour_per_second
     results = g.ease.values[1:] > 1
 
     ret = []
     for partition in partition_by(lambda tnow_res: tnow_res[1],
                                   zip(tnows_hours, results)):
+        # `partition` is all True or all False
         first_result = partition[0][1]
         if first_result or len(partition) <= 1:
             ret.extend(partition)
@@ -36,9 +37,6 @@ def dfToVariables(df):
             # Then for each group of timed-clusters, pick the last one
             ret.extend([split[-1] for split in splits])
     tnows_hours, results = zip(*ret)
-
-    tnows_hours = np.diff(tnows_hours)
-    results = results[1:]
 
     return tnows_hours, results
 
