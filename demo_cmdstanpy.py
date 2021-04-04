@@ -1,5 +1,6 @@
+import numpy as np
+from json import dump, load
 from cmdstanpy import CmdStanModel
-from json import dump
 
 
 def init(datafile):
@@ -9,9 +10,13 @@ def init(datafile):
 
 datafile = 'data.json'
 model = CmdStanModel(stan_file="model.stan")
-fit = model.sample(data=datafile, adapt_delta=0.9, iter_sampling=10_000)
+fit = model.sample(data=datafile, adapt_delta=0.99, iter_sampling=10_000)
 
-print(fit.summary())
+fitdf = fit.summary()
 
 print(fit.diagnose())
-fit.stan_variables()['hl']
+
+data = load(open(datafile, 'r'))
+hlmedian = fitdf.loc[[c for c in fitdf.index if c.startswith("hl[")],
+                     '50%'].values
+pRecall = np.exp(-np.array(data['delta']) / hlmedian)
