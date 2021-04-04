@@ -20,6 +20,6 @@ model {
         quiz[t] ~ bernoulli(exp(-delta[t] / (hl[t])));
     
     // sigmaprocess ~ normal(1, 1);
-    process ~ normal(0, .1);
-    initHl ~ normal(1, 1);
+    process ~ normal(0, .5);
+    initHl ~ gamma(2, 0.5);
 }

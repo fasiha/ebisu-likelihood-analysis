@@ -2,6 +2,7 @@ import stan
 from email.utils import parsedate_tz, mktime_tz
 import pandas as pd
 import numpy as np
+from json import dump
 from utils import split_by, partition_by
 
 
@@ -42,13 +43,14 @@ def dfToVariables(df):
 
 
 def fitVariables(deltas, results, viz=False, msg=''):
-    t = np.cumsum(deltas)
+    t = np.cumsum(deltas).tolist()
     data = {
         "T": len(results),
         "quiz": [int(x) for x in results],
         "delta": deltas,
         "time": t
     }
+    dump(data, open('data.json', 'w'))
 
     model = open('model.stan', 'r').read()
     posterior = stan.build(model, data=data, random_seed=1)
@@ -109,7 +111,8 @@ def demo():
 # 85% pass rate, 20 quizzes
 fitdf, fit = fitCardid(df, 1300038030510.0, viz=False)
 deltas, results = dfToVariables(df[df.cardId == 1300038030510.0])
-
+import pylab as plt
+plt.ion()
 # fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes
 
 
