@@ -1,4 +1,3 @@
-import stan
 from email.utils import parsedate_tz, mktime_tz
 import pandas as pd
 import numpy as np
@@ -39,11 +38,11 @@ def dfToVariables(df):
             ret.extend([split[-1] for split in splits])
     tnows_hours, results = zip(*ret)
 
-    return tnows_hours, results
+    return tnows_hours, results, g
 
 
 def fitVariables(deltas, results, viz=False, msg=''):
-    t = np.cumsum(deltas).tolist()
+    t = np.cumsum(np.hstack([[0], deltas[:-1]])).tolist()
     data = {
         "T": len(results),
         "quiz": [int(x) for x in results],
@@ -53,6 +52,7 @@ def fitVariables(deltas, results, viz=False, msg=''):
     dump(data, open('data.json', 'w'))
 
     model = open('model.stan', 'r').read()
+    import stan
     posterior = stan.build(model, data=data, random_seed=1)
     fit = posterior.sample(num_chains=4, num_samples=10_000)
     print(fit)
@@ -76,7 +76,7 @@ def fitVariables(deltas, results, viz=False, msg=''):
 
 
 def fitCardid(df, cid, viz=True):
-    deltas, results = dfToVariables(df[df.cardId == cid])
+    deltas, results, g = dfToVariables(df[df.cardId == cid])
     months = sum(deltas) / 24 / 365 * 12
     percentRight = 100 * np.mean(results)
     return fitVariables(
@@ -109,11 +109,12 @@ def demo():
 
 
 # 85% pass rate, 20 quizzes
-fitdf, fit = fitCardid(df, 1300038030510.0, viz=False)
-deltas, results = dfToVariables(df[df.cardId == 1300038030510.0])
+# deltas, results, g = dfToVariables(df[df.cardId == 1300038030510.0])
+# fitdf, fit = fitCardid(df, 1300038030510.0, viz=False)
 import pylab as plt
+
 plt.ion()
-# fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes
+fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes
 
 
 def analyzeDf(df):
