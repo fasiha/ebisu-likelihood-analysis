@@ -88,12 +88,6 @@ def fitCardid(df, cid, viz=True):
     )
 
 
-df = pd.read_csv("fuzzy-anki.csv", parse_dates=True)
-# via https://stackoverflow.com/a/31905585
-df['timestamp'] = df.dateString.map(
-    lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
-
-
 def demo():
     model = open('model.stan', 'r').read()
     posterior = stan.build(model,
@@ -108,16 +102,7 @@ def demo():
     fitdf = fitdf[[c for c in fitdf.columns if not c.endswith("_")]]
 
 
-# 85% pass rate, 20 quizzes
-# deltas, results, g = dfToVariables(df[df.cardId == 1300038030510.0])
-# fitdf, fit = fitCardid(df, 1300038030510.0, viz=False)
-import pylab as plt
-
-plt.ion()
-fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes
-
-
-def analyzeDf(df):
+def analyzeDf(df, viz=False):
     cardId_group = df.groupby('cardId')
     cids = []
     lens = []
@@ -125,7 +110,7 @@ def analyzeDf(df):
     times = []
     for cardId, group in cardId_group:
         if len(group) < 4: continue
-        deltas, results = dfToVariables(group)
+        deltas, results, _ = dfToVariables(group)
         passRates.append(np.mean(results))
         lens.append(len(group))
         times.append(np.sum(deltas) / 24 / 365 * 12)
@@ -133,9 +118,29 @@ def analyzeDf(df):
 
     summary = pd.DataFrame(zip(cids, lens, passRates, times),
                            columns='cardid,len,passRate,months'.split(','))
-    pd.plotting.scatter_matrix(summary[summary.columns[1:]])
+    if viz: pd.plotting.scatter_matrix(summary[summary.columns[1:]])
     return summary
 
 
 # summary = analyzeDf(df)
 # [fitCardid(df, c) for c in summary[summary['len'] > 40]['cardid']]
+
+
+def csv2df(csvfile):
+    df = pd.read_csv(csvfile, parse_dates=True)
+    # via https://stackoverflow.com/a/31905585
+    df['timestamp'] = df.dateString.map(
+        lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
+    return df
+
+
+if __name__ == '__main__':
+    df = csv2df("fuzzy-anki.csv")
+
+    # 85% pass rate, 20 quizzes
+    # deltas, results, g = dfToVariables(df[df.cardId == 1300038030510.0])
+    # fitdf, fit = fitCardid(df, 1300038030510.0, viz=False)
+    import pylab as plt
+
+    plt.ion()
+    fitCardid(df, 1300038030580.0)  # 90% pass rate, 30 quizzes

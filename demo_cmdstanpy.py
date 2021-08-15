@@ -2,6 +2,11 @@ import numpy as np
 from json import dump, load
 from cmdstanpy import CmdStanModel
 
+import stan_test as ankidat
+
+df = ankidat.csv2df("fuzzy-anki.csv")
+summary = ankidat.analyzeDf(df)
+
 
 def init(datafile, T):
     delta = [20., 20. * 2, 20. * 4, 20. * 8]
@@ -30,9 +35,6 @@ summarydf = fit.summary()
 print(fit.diagnose())
 
 data = load(open(datafile, 'r'))
-# hlmedian = summarydf.loc[[c for c in summarydf.index if c.startswith("hl[")],
-#                          '50%'].values
-# pRecall = np.exp(-np.array(data['delta']) / hlmedian)
 
 import pandas as pd
 import pylab as plt
@@ -61,7 +63,7 @@ def _meanVarToBeta(mean, var):
 
 
 hlmean = np.median(fit.stan_variables()['hl'], axis=0)
-n = np.arange(len(hlmean))
+n = 1 + np.arange(len(hlmean))
 t = np.cumsum(data['delta'])  # different than data['time]!
 ok = np.array(data['quiz'], dtype=bool)
 notok = np.logical_not(ok)
