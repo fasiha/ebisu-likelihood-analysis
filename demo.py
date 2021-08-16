@@ -85,14 +85,12 @@ def boostedUpdateModel(model: Model,
 
     boolResult = result > 1
     newModel = ebisu.updateRecall(model, boolResult, 1, tnow)
-    hlBoost: float = ebisu.modelToPercentileDecay(
-        newModel) / ebisu.modelToPercentileDecay(model)
     b = baseBoosts[result]
-    boostedModel = ebisu.rescaleHalflife(newModel, hlBoost * b)
+    boostedModel = ebisu.rescaleHalflife(newModel, b)
     if verbose:
-        print(
-            f'result={result}, hlBoost * baseBoost = {hlBoost} * {b} = {hlBoost * b}'
-        )
+        hlBoost: float = ebisu.modelToPercentileDecay(
+            newModel) / ebisu.modelToPercentileDecay(model)
+        print(f'result={result}, hlBoost={hlBoost}, baseBoost={b}')
     return boostedModel
 
 
@@ -143,7 +141,7 @@ if __name__ == '__main__':
     cid = 1300038030510.0  # 85% pass rate, 20 quizzes
     cid = 1354715369763.0  # 67%, 31 quizzes
 
-    boosts = [None, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9]
+    boosts = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9]
     liks = []
     for baseBoost in boosts:
         if baseBoost is None:
@@ -165,6 +163,9 @@ if __name__ == '__main__':
     plt.ylabel('log likelihood')
     plt.legend([f'boost={b}' for b in boosts])
 
+    print(
+        np.array([[*max(zip(v, hl), key=lambda xh: xh[0]), baseBoost]
+                  for (v, baseBoost) in zip(liks, boosts)]))
     # likelihood([2., 2., 4.], tnows_hours, results, lambda m, r, t: boostedUpdateModel(m, t, r, 1.9, True), True)
 
     # groups = traintest(df)
