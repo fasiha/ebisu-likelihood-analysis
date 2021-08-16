@@ -224,8 +224,6 @@ if __name__ == '__main__':
   import sqlite3
   con = sqlite3.connect('collection.anki2')
   df = pd.read_sql(SQL_TO_USE, con)
-  # WILL ONLY LOAD REVIEWS FOR CARDS THAT STILL EXIST
-  # Change "inner join" to "left outer join" above to look at ALL reviews
   con.close()
   df['timestamp'] = df.id.astype('datetime64[ms]')
   print(f'loaded SQL data, {len(df)} rows')
