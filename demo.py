@@ -12,20 +12,41 @@ Updater = typing.Callable[[Model, int, float], Model]
 
 
 def likelihood(initialModel: Model,
-               tnows: list[float],
+               dts: list[float],
                results: list[int],
                update: Updater,
                verbose: bool = False) -> float:
+  """Compute likelihood of a set of reviews given an initial Ebisu model and update function
+
+  This is the core function for this likelihood analysis: given a set of reviews, `dts` being
+  a list of hours since last review (so the first element is the number of hours after the card
+  is learned) and `results` being an Anki result:
+  - 1=fail
+  - 2=hard
+  - 3=normal
+  - 4=easy,
+
+  as well as an `initialModel` and a model `update` function, reduce all these into a single number:
+  the probabilistic likelihood that this model could have generated the reviews seen. This is a
+  powerful way to evaluate both `initialModel` and `update`.
+
+  N.B. The *log* likelihood will be returned. Bigger is better (more likely model/update).
+
+  "Likelihood" (or log likelihood) is basically a product (sum) of each actual quiz result's
+  predicted outcome. The more surprising quiz results are to the model, the lower the likelihood
+  is. A perfect model/updater will assign probabilities of 1.0 to each quiz, yielding a likelihood
+  of 1.0. In log, `log(1) = 0` so the best log likelihood possible is 0.
+  """
   model = initialModel
   logProbabilities: list[float] = []
-  for (tnow, result) in zip(tnows, results):
+  for (dt, result) in zip(dts, results):
     boolResult = result > 1  # 1=fail in Anki, 2=hard, 3=normal, 4=easy
 
-    logPredictedRecall = ebisu.predictRecall(model, tnow)
+    logPredictedRecall = ebisu.predictRecall(model, dt)
     # Bernoulli trial's probability mass function: p if result=True, else 1-p, except in log
     logProbabilities.append(
         logPredictedRecall if boolResult else np.log(-np.expm1(logPredictedRecall)))
-    model = update(model, result, tnow)
+    model = update(model, result, dt)
     if verbose:
       print(f'model={model}')
 
@@ -35,65 +56,123 @@ def likelihood(initialModel: Model,
   return sum(logProbabilities)
 
 
+def likelihoodHelper(dts_hours: list[float], results: list[int], initAlphaBeta: float,
+                     initHl: float, baseBoost: float):
+  """Convert the parameters we're interested in to a call to the `likelihood` function
+
+  The `likelihood` function above is quite generic: it works for any model/update function. We
+  may be interested in varying the following:
+  - inital alpha=beta
+  - initial halflife
+  - the basic boost to apply (whatever that might mean)
+
+  This helper is a thin wrapper to `likelihood`.
+  """
+  model = (initAlphaBeta, initAlphaBeta, initHl)
+  updater: Updater = lambda model, result, df: boostedUpdateModel(model, df, result, baseBoost)
+  return likelihood(model, dts_hours, results, updater)
+
+
 def dfToVariables(df):
+  """Convert a Pandas dataframe of an Anki SQLite database to a list of delta-times and results
+
+  Given a dataframe containing all reviews of a single card, we want to get a simple list of hours
+  before each review as well as the result of that review (1=fail, 2=hard, 3=normal, 4=easy).
+
+  This function does some extra work to find successive failed reviews and combine them into a
+  SINGLE failed review if they happened close enough. This is because sometimes in my data, I have
+  a failure, and then Anki quizzed me a couple of minutes ago and I accidentally clicked "fail"
+  again. This erroneous data can really mess up Ebisu so I want to try and combine these runs of
+  two or more successive failures that happen within an interval (say, a half-hour), into a single
+  failure.
+  """
   g = df.copy().sort_values('timestamp')
   hour_per_millisecond = 1 / 3600e3
   # drop the first
-  tnows_hours: list[float] = np.diff(g.timestamp.values.astype('datetime64[ms]')).astype(
+  dts_hours: list[float] = np.diff(g.timestamp.values.astype('datetime64[ms]')).astype(
       'timedelta64[ms]').astype(float) * hour_per_millisecond
   results: list[int] = g.ease.values[1:]
 
   ret = []
-  for partition in partition_by(lambda tnow_res: tnow_res[1] > 1, zip(tnows_hours, results)):
-    # `partition` is all True or all False
-    first_result = partition[0][1] > 1
+  for partition in partition_by(lambda dt_res: dt_res[1] > 1, zip(dts_hours, results)):
+    # `partition_by` splits up the list of `(dt, result)` tuples into sub-lists where each
+    # `partition` is all successes or all failures.
+    # SO: `partition[0][1]` is "the first reivew's result" (1 through 4).
+    first_result = partition[0][1] > 1  # boolean
     if first_result or len(partition) <= 1:
+      # either this chunk of reviews are all successes or there's only one failure
       ret.extend(partition)
     else:
       # failure, and more than one of them in a row. Group them within a time period
-      splits = split_by(lambda v, vs: (v[0] - vs[0][0]) >= 0.5, partition)
+      GROUP_FAILURE_TIME_HOURS = 0.5
+      splits = split_by(lambda v, vs: (v[0] - vs[0][0]) >= GROUP_FAILURE_TIME_HOURS, partition)
       # Then for each group of timed-clusters, pick the last one
       ret.extend([split[-1] for split in splits])
-  tnows_hours, results = zip(*ret)
+  dts_hours, results = zip(*ret)
 
-  return tnows_hours, results, g
-
-
-def dfToLikelihood(df, default_a: float, updater: Updater):
-  tnows_hours, results, g = dfToVariables(df)
-
-  hl = np.logspace(0, 3, 50)
-  lik = [likelihood((default_a, default_a, h), tnows_hours, results, updater) for h in hl]
-  best_hl: float = hl[np.argmax(lik)]
-  return best_hl, hl, lik, g, tnows_hours, results
+  return dts_hours, results, g
 
 
 def boostedUpdateModel(model: Model,
-                       tnow: float,
+                       dt: float,
                        result: int,
                        baseBoost: float,
                        verbose: bool = False) -> Model:
+  """Early proposed alternative to Ebisu's updateModel: apply a boost after each update
+
+  The basic idea here is that, `ebisu.updateModel` returns the posterior on recall probability at
+  the initial point in time that the prior was created, without moving it to the time of the quiz.
+  For example, if we learn a fact at midnight and model its recall probability with `[a, b, t]` 
+  (`Beta(a, b)` distribution at time `t` hours after midnight), and then have a quiz at 1am, and
+  call `ebisu.updateRecall`, the returned model is a posterior is still from the point of view of
+  when the fact was first learned. It still only applies to quizzes that might happen sometime
+  after midnight even though an hour has passed and that means the strengh of the memory has
+  changed.
+
+  We need to have SOME way of moving the posterior past midnight.
+
+  This function presents one stupid way to do that.
+
+  It just scales the posterior halflife by some fixed factor 😅.
+
+  That's what `baseBoost` does. With `baseBoost >= 1`, the posterior halflife will be rescaled
+  by `baseBoost` factor for normal quiz results (result=2), a bit more for easy, a bit less for
+  hard.
+
+  There's a million ways to improve this update mechanism but the point here is to test the
+  likelihood mechanism. The simple mechanism taken here is explicitly modeled on Anki.
+  """
   extra = baseBoost - 1  # e.g., 0.4 if baseBoost is 1.4
   assert extra >= 0
   baseBoosts = [0, 1.0, baseBoost - extra / 2, baseBoost, baseBoost + extra / 2]
 
   boolResult = result > 1
-  newModel = ebisu.updateRecall(model, boolResult, 1, tnow)
+  newModel = ebisu.updateRecall(model, boolResult, 1, dt)
   b = baseBoosts[result]
   boostedModel = ebisu.rescaleHalflife(newModel, b)
   if verbose:
-    hlBoost: float = ebisu.modelToPercentileDecay(newModel) / ebisu.modelToPercentileDecay(model)
-    print(f'result={result}, hlBoost={hlBoost}, baseBoost={b}')
+    # `hlBoost` is how much Ebisu already boosted the halflife
+    # hlBoost: float = ebisu.modelToPercentileDecay(newModel) / ebisu.modelToPercentileDecay(model)
+    print(f'result={result}, boost={b}')
   return boostedModel
 
 
 def traintest(inputDf):
+  """Split a Pandas dataframe of all reviews into a train set and a test set
+  
+  Groups all reviews into those belonging to the same card. Throws out cards with too few reviews
+  or too few correct reviews. Splits the resulting cards into a small train set and a larger test
+  set. We'll only look at the training set when designing our new update algorithm.
+
+  The training set will only have cards with less than perfect reviews (since it's impossible for
+  a meaningful likelihood to be computed for all passing reviews).
+  """
   allGroups = []
   for key, df in inputDf.copy().groupby('cid'):
     if len(df) < 5:
       continue
 
-    _tnows_hours, results, _ = dfToVariables(df)
+    _dts_hours, results, _ = dfToVariables(df)
     fractionCorrect = np.mean(np.array(results) > 1)
     if len(results) < 5 or fractionCorrect < 0.67:
       continue
@@ -107,13 +186,6 @@ def traintest(inputDf):
   allGroups.sort(key=lambda d: d['fractionCorrect'])
   trainGroups = [group for group in allGroups[::3] if group['fractionCorrect'] < 1.0]
   return trainGroups, allGroups
-
-
-def likelihoodHelper(tnows_hours: list[float], results: list[int], initAlphaBeta: float,
-                     initHl: float, baseBoost: float):
-  model = (initAlphaBeta, initAlphaBeta, initHl)
-  updater: Updater = lambda model, result, tnow: boostedUpdateModel(model, tnow, result, baseBoost)
-  return likelihood(model, tnows_hours, results, updater)
 
 
 if __name__ == '__main__':
@@ -134,24 +206,27 @@ if __name__ == '__main__':
   print(f'loaded SQL data, {len(df)} rows')
 
   train, _ = traintest(df)
-  train = train[::10]  # further subdivide
+  train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
   import pylab as plt  # type: ignore
   plt.ion()
 
+  # vary initial halflife and baseBoost amount
   hl = np.logspace(0, 3, 50)
   boost = np.logspace(0, np.log10(2), 5)
+
   hls, boosts = np.meshgrid(hl, boost)
   likelihoodsPerGroup = []
   for group in tqdm(train):
-    tnows_hours, results, _ = dfToVariables(group['df'])
+    dts_hours, results, _ = dfToVariables(group['df'])
     initAlphaBeta = 2.0
-    curriedLikelihood = lambda *args: likelihoodHelper(tnows_hours, results, initAlphaBeta, *args)
+    curriedLikelihood = lambda *args: likelihoodHelper(dts_hours, results, initAlphaBeta, *args)
 
     liks = np.vectorize(curriedLikelihood)(hls, boosts)
     likelihoodsPerGroup.append(liks)
 
+  # Show some example results
   exampleFig, exampleAxs = plt.subplots(3, 3)
   for idx, (ax, lik, group) in enumerate(zip(exampleAxs.ravel(), likelihoodsPerGroup, train)):
     ax.semilogx(hl, lik.T)
@@ -163,6 +238,7 @@ if __name__ == '__main__':
       ax.legend([f'boost={b:0.2f}' for b in boost])
   exampleFig.tight_layout()
 
+  # Aggregate all results
   fig, [ax1, ax2] = plt.subplots(2, 1)
   ax1.plot(boost, np.vstack([np.max(x, axis=1) for x in likelihoodsPerGroup]).T)
   ax1.set_xlabel('baseBoost')
