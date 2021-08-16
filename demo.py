@@ -37,10 +37,11 @@ def likelihood(initialModel: Model,
 
 def dfToVariables(df):
     g = df.copy().sort_values('timestamp')
-    g.timestamp -= g.iloc[0].timestamp
-    hour_per_second = 1 / 3600
+    hour_per_millisecond = 1 / 3600e3
     # drop the first
-    tnows_hours: list[float] = np.diff(g.timestamp.values) * hour_per_second
+    tnows_hours: list[float] = np.diff(
+        g.timestamp.values.astype('datetime64[ms]')).astype(
+            'timedelta64[ms]').astype(float) * hour_per_millisecond
     results: list[int] = g.ease.values[1:]
 
     ret = []
@@ -97,15 +98,20 @@ def boostedUpdateModel(model: Model,
 
 def traintest(inputDf):
     allGroups = []
-    for key, df in inputDf.copy().groupby('cardId'):
+    for key, df in inputDf.copy().groupby('cid'):
         if len(df) < 5:
             continue
+
         _tnows_hours, results, _ = dfToVariables(df)
+        fractionCorrect = np.mean(np.array(results) > 1)
+        if len(results) < 5 or fractionCorrect < 0.67:
+            continue
+
         allGroups.append({
             'df': df,
             'len': len(results),
             'key': key,
-            'fractionCorrect': np.mean(np.array(results) > 1)
+            'fractionCorrect': fractionCorrect
         })
     allGroups.sort(key=lambda d: d['fractionCorrect'])
     trainGroups = [
@@ -123,14 +129,26 @@ def likelihoodHelper(tnows_hours: list[float], results: list[int],
 
 
 if __name__ == '__main__':
-    df = pd.read_csv("fuzzy-anki.csv", parse_dates=True)
-    # via https://stackoverflow.com/a/31905585
-    df['timestamp'] = df.dateString.map(
-        lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
+    sqlReviewsWithCards = 'select revlog.*, notes.flds from revlog inner join notes on revlog.cid = notes.id'
+    sqlAllReviews = sqlReviewsWithCards.replace(' inner join ',
+                                                ' left outer join ')
+    SQL_TO_USE = sqlReviewsWithCards
+    # Sometimes you delete cards because you were testing reviews, or something?
+    # So here you might want to just look at reviews for which the matching cards
+    # still exist in the deck.
+
+    import sqlite3
+    con = sqlite3.connect('collection.anki2')
+    df = pd.read_sql(SQL_TO_USE, con)
+    # WILL ONLY LOAD REVIEWS FOR CARDS THAT STILL EXIST
+    # Change "inner join" to "left outer join" above to look at ALL reviews
+    con.close()
+    df['timestamp'] = df.id.astype('datetime64[ms]')
+    print(f'loaded SQL data, {len(df)} rows')
 
     train, _ = traintest(df)
-    train = train[::50]
-    # [{'len':g['len'], 'pct':g['fractionCorrect'], 'cid':g['key']} for g in groups[:50]]
+    train = train[::10]  # further subdivide
+    print(f'split flashcards into train/test, {len(train)} cards in train set')
 
     import pylab as plt  # type: ignore
     plt.ion()
@@ -148,12 +166,13 @@ if __name__ == '__main__':
         liks = np.vectorize(curriedLikelihood)(hls, boosts)
         likelihoodsPerGroup.append(liks)
 
-    exampleFig, exampleAxs = plt.subplots(2, 2)
+    exampleFig, exampleAxs = plt.subplots(3, 3)
     for idx, (ax, lik, group) in enumerate(
             zip(exampleAxs.ravel(), likelihoodsPerGroup, train)):
         ax.semilogx(hl, lik.T)
         ax.set_xlabel('init halflife (hours)')
         ax.set_ylabel('log lik.')
+        ax.grid()
         ax.set_title(
             f'{group["len"]} reviews, {group["fractionCorrect"]*100:0.1f}% correct'
         )
