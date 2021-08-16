@@ -1,5 +1,30 @@
+"""
+Setup suggestion:
+
+```console
+python -m venv likelihood-demo
+source likelihood-demo/bin/activate
+python -m pip install tqdm pandas numpy ebisu matplotlib
+```
+
+This installs a virtual environment via `venv` so you don't pollute your system, then
+installs some dependencies.
+
+Then, copy an Anki database, `collection.anki2` to this directory and then run
+```console
+python demo.py
+```
+This will generate some plots and save them.
+
+I personally tend to install ipython and run it:
+```
+python -m pip install ipython
+ipython
+```
+and the run the script there: `%run demo.py`, so I can interact with plots, but that's just me.
+"""
+
 from tqdm import tqdm  #type:ignore
-from email.utils import parsedate_tz, mktime_tz
 import pandas as pd  # type: ignore
 import numpy as np
 import ebisu  # type: ignore
@@ -237,6 +262,8 @@ if __name__ == '__main__':
     if idx == 0:
       ax.legend([f'boost={b:0.2f}' for b in boost])
   exampleFig.tight_layout()
+  plt.savefig("examples.png", dpi=300)
+  plt.savefig("examples.svg")
 
   # Aggregate all results
   fig, [ax1, ax2] = plt.subplots(2, 1)
@@ -253,3 +280,5 @@ if __name__ == '__main__':
   ax2.legend([f'boost={b:0.2f}' for b in boost])
 
   fig.tight_layout()
+  plt.savefig("results.png", dpi=300)
+  plt.savefig("results.svg")
