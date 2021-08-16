@@ -1,7 +1,8 @@
+from tqdm import tqdm  #type:ignore
 from email.utils import parsedate_tz, mktime_tz
-import pandas as pd
+import pandas as pd  # type: ignore
 import numpy as np
-import ebisu
+import ebisu  # type: ignore
 import typing
 
 from utils import split_by, partition_by
@@ -61,7 +62,7 @@ def dfToVariables(df):
 
 
 def dfToLikelihood(df, default_a: float, updater: Updater):
-    tnows_hours, results, g = dfToVariables(df[df.cardId == cid])
+    tnows_hours, results, g = dfToVariables(df)
 
     hl = np.logspace(0, 3, 50)
     lik = [
@@ -95,19 +96,30 @@ def boostedUpdateModel(model: Model,
 
 
 def traintest(inputDf):
-    l = []
+    allGroups = []
     for key, df in inputDf.copy().groupby('cardId'):
         if len(df) < 5:
             continue
         _tnows_hours, results, _ = dfToVariables(df)
-        l.append({
+        allGroups.append({
             'df': df,
             'len': len(results),
             'key': key,
-            'pctCorrect': np.mean(np.array(results) > 1)
+            'fractionCorrect': np.mean(np.array(results) > 1)
         })
-    l.sort(key=lambda d: d['pctCorrect'])
-    return l
+    allGroups.sort(key=lambda d: d['fractionCorrect'])
+    trainGroups = [
+        group for group in allGroups[::3] if group['fractionCorrect'] < 1.0
+    ]
+    return trainGroups, allGroups
+
+
+def likelihoodHelper(tnows_hours: list[float], results: list[int],
+                     initAlphaBeta: float, initHl: float, baseBoost: float):
+    model = (initAlphaBeta, initAlphaBeta, initHl)
+    updater: Updater = lambda model, result, tnow: boostedUpdateModel(
+        model, tnow, result, baseBoost)
+    return likelihood(model, tnows_hours, results, updater)
 
 
 if __name__ == '__main__':
@@ -116,57 +128,51 @@ if __name__ == '__main__':
     df['timestamp'] = df.dateString.map(
         lambda s: mktime_tz(parsedate_tz(s.replace("GMT", ""))))
 
-    import pylab as plt
+    train, _ = traintest(df)
+    train = train[::50]
+    # [{'len':g['len'], 'pct':g['fractionCorrect'], 'cid':g['key']} for g in groups[:50]]
+
+    import pylab as plt  # type: ignore
     plt.ion()
 
-    if 0 == 1:
-        results = []
-        cardId_group = df.groupby('cardId')
-        from tqdm import tqdm
-        for cardId, group in tqdm(cardId_group):
-            failrate = (group.ease <= 1).sum() / len(group)
-            if failrate == 0: continue
-            best_hl, hl, lik, gdf = dfToLikelihood(group, 2.)
-            results.append(
-                dict(cardId=cardId,
-                     best_hl=best_hl,
-                     failrate=(gdf.ease.iloc[1:] <= 1).mean(),
-                     tot=len(gdf)))
-        rdf = pd.DataFrame(results).sort_values('best_hl')
+    hl = np.logspace(0, 3, 50)
+    boost = np.logspace(0, np.log10(2), 5)
+    hls, boosts = np.meshgrid(hl, boost)
+    likelihoodsPerGroup = []
+    for group in tqdm(train):
+        tnows_hours, results, _ = dfToVariables(group['df'])
+        initAlphaBeta = 2.0
+        curriedLikelihood = lambda *args: likelihoodHelper(
+            tnows_hours, results, initAlphaBeta, *args)
 
-        rdf.plot.scatter(x='failrate', y='best_hl')
-        plt.gca().set_yscale('log')
+        liks = np.vectorize(curriedLikelihood)(hls, boosts)
+        likelihoodsPerGroup.append(liks)
 
-    cid = 1300038030580.0  # 90% pass rate, 30 quizzes
-    cid = 1300038030510.0  # 85% pass rate, 20 quizzes
-    cid = 1354715369763.0  # 67%, 31 quizzes
+    exampleFig, exampleAxs = plt.subplots(2, 2)
+    for idx, (ax, lik, group) in enumerate(
+            zip(exampleAxs.ravel(), likelihoodsPerGroup, train)):
+        ax.semilogx(hl, lik.T)
+        ax.set_xlabel('init halflife (hours)')
+        ax.set_ylabel('log lik.')
+        ax.set_title(
+            f'{group["len"]} reviews, {group["fractionCorrect"]*100:0.1f}% correct'
+        )
+        if idx == 0:
+            ax.legend([f'boost={b:0.2f}' for b in boost])
+    exampleFig.tight_layout()
 
-    boosts = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9]
-    liks = []
-    for baseBoost in boosts:
-        if baseBoost is None:
-            updater: Updater = lambda model, result, tnow: ebisu.updateRecall(
-                model, result > 1, 1, tnow)
-        else:
-            updater: Updater = (  # type: ignore
-                lambda model, result, tnow: boostedUpdateModel(
-                    model, tnow, result, baseBoost))
-        best_hl, hl, lik, g, tnows_hours, results = dfToLikelihood(
-            df[df.cardId == cid], 2.0, updater)
-        liks.append(lik)
-        print(f'done with baseBoost={baseBoost}')
+    fig, [ax1, ax2] = plt.subplots(2, 1)
+    ax1.plot(boost,
+             np.vstack([np.max(x, axis=1) for x in likelihoodsPerGroup]).T)
+    ax1.set_xlabel('baseBoost')
+    ax1.set_ylabel('max log lik.')
+    # fig.legend([f'{int(group["key"])}' for group in train])
+    ax1.set_title('Likelihood, max over all init halflife')
 
-    plt.figure()
-    plt.semilogx(hl, np.array(liks).T)
-    plt.grid()
-    plt.xlabel('initial halflife (hours)')
-    plt.ylabel('log likelihood')
-    plt.legend([f'boost={b}' for b in boosts])
+    ax2.semilogx(hl, sum(likelihoodsPerGroup).T)
+    ax2.set_xlabel('initial halflife')
+    ax2.set_ylabel('max likelihood')
+    ax2.set_title('Likelihood, summed over all train cards')
+    ax2.legend([f'boost={b:0.2f}' for b in boost])
 
-    print(
-        np.array([[*max(zip(v, hl), key=lambda xh: xh[0]), baseBoost]
-                  for (v, baseBoost) in zip(liks, boosts)]))
-    # likelihood([2., 2., 4.], tnows_hours, results, lambda m, r, t: boostedUpdateModel(m, t, r, 1.9, True), True)
-
-    # groups = traintest(df)
-    # [{'len':g['len'], 'pct':g['pctCorrect'], 'cid':g['key']} for g in groups[:50]]
+    fig.tight_layout()
