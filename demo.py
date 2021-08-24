@@ -213,19 +213,24 @@ def traintest(inputDf):
   return trainGroups, allGroups
 
 
-if __name__ == '__main__':
+def sqliteToDf(filename: str, reviewsWithCardsOnly=True):
   sqlReviewsWithCards = 'select revlog.*, notes.flds from revlog inner join notes on revlog.cid = notes.id'
   sqlAllReviews = sqlReviewsWithCards.replace(' inner join ', ' left outer join ')
-  SQL_TO_USE = sqlReviewsWithCards
+  SQL_TO_USE = sqlReviewsWithCards if reviewsWithCardsOnly else sqlAllReviews
   # Sometimes you delete cards because you were testing reviews, or something?
   # So here you might want to just look at reviews for which the matching cards
   # still exist in the deck.
 
   import sqlite3
-  con = sqlite3.connect('collection.anki2')
+  con = sqlite3.connect(filename)
   df = pd.read_sql(SQL_TO_USE, con)
   con.close()
   df['timestamp'] = df.id.astype('datetime64[ms]')
+  return df
+
+
+if __name__ == '__main__':
+  df = sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
 
   train, _ = traintest(df)
