@@ -53,7 +53,7 @@ def weightedMeanVar(w: Farr, x: Farr):
 def post(xs: list[int], ts: list[float], alphaBeta: float, initHalflife: float, boostMode: float,
          boostBeta: float):
   bools = [x > 1 for x in xs]
-  N = 1_000_000
+  N = 5_000_000
   p: np.ndarray = betarv.rvs(alphaBeta, alphaBeta, size=N)
 
   boostAlpha = boostBeta * boostMode + 1
@@ -63,12 +63,13 @@ def post(xs: list[int], ts: list[float], alphaBeta: float, initHalflife: float, 
   logp = np.log(p)
   previousHalflife: np.ndarray = np.ones_like(boost) * initHalflife
   logweight: Farr = 0.0
-  for i, (x, t) in enumerate(zip(bools, ts)):
+  for x, t in zip(bools, ts):
+    boostedDelta = t / previousHalflife
+    logweight += boostedDelta * logp if x else np.log(-np.expm1(boostedDelta * logp))
+
     thisBoost: np.ndarray = clampLerp(0.8 * previousHalflife, previousHalflife,
                                       np.minimum(boost, 1.0), boost, t)
     previousHalflife = previousHalflife * thisBoost
-    boostedDelta = t / previousHalflife
-    logweight += boostedDelta * logp if x else np.log(-np.expm1(boostedDelta * logp))
   weight = np.exp(logweight)
   return dict(weight=weight, p=p, boost=boost)
 
@@ -87,7 +88,6 @@ if __name__ == "__main__":
   boostBeta = 10.0 / 3
   initAB = 2.0
   res = post(results, dts_hours, initAB, initHl, boostMode, boostBeta)
-  print(res)
   import ebisu  #type:ignore
   mv = weightedMeanVar(res['weight'], res['p'])
   postBeta = _meanVarToBeta(mv['mean'], mv['var'])
@@ -99,10 +99,10 @@ if __name__ == "__main__":
   print('estimate of boost:', postGammaMode)
 """
 boostBeta = 10:
-estimate of inital model: (1.966453243153682, 1.966453243153682, 5.412253762505669)
-estimate of boost: 1.5232633082128115
+estimate of inital model: (2.6759692857154893, 2.6759692857154893, 9.163320510417671)
+estimate of boost: 1.477778729146228
 
 boostBeta = 10/3:
-estimate of inital model: (1.5672762847077388, 1.5672762847077388, 4.553202965543648)
-estimate of boost: 1.585127476879706
+estimate of inital model: (2.395692291697088, 2.395692291697088, 8.573529067668835)
+estimate of boost: 1.5118281149632586
 """
