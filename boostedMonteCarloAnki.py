@@ -1,6 +1,7 @@
 import typing
 import numpy as np
 from scipy.stats import gamma as gammarv, beta as betarv  #type:ignore
+from scipy.special import logsumexp  #type:ignore
 
 Farr = typing.Union[float, np.ndarray]
 
@@ -38,7 +39,7 @@ def _meanVarToBeta(mean, var) -> tuple[float, float]:
   return alpha, beta
 
 
-def weightedMean(w: Farr, x: Farr) -> Farr:
+def weightedMean(w: Farr, x: Farr) -> float:
   return np.sum(w * x) / np.sum(w)
 
 
@@ -54,31 +55,36 @@ def post(xs: list[int],
          initHalflife: float,
          boostMode: float,
          boostBeta: float,
+         nsamples=5_000_000,
          returnDetails=False):
   bools = [x > 1 for x in xs]
-  N = 5_000_000
-  p: np.ndarray = betarv.rvs(alphaBeta, alphaBeta, size=N)
+  p: np.ndarray = betarv.rvs(alphaBeta, alphaBeta, size=nsamples)
 
   boostAlpha = boostBeta * boostMode + 1
-  boost: np.ndarray = gammarv.rvs(boostAlpha, scale=1 / boostBeta, size=N)
+  boost: np.ndarray = gammarv.rvs(boostAlpha, scale=1 / boostBeta, size=nsamples)
 
   logp = np.log(p)
-  previousHalflife: np.ndarray = np.ones_like(boost) * initHalflife
-  logweight: Farr = 0.0
+  prevTimeHorizon: np.ndarray = np.ones_like(boost) * initHalflife
+  logweight = np.zeros_like(boost)
+  precalls: list[float] = []
   for x, t in zip(bools, ts):
-    boostedDelta = t / previousHalflife
+    boostedDelta = t / prevTimeHorizon
+
+    # not cheating here but need to move this to likelihood to ensure data isolation
+    precalls.append(weightedMean(np.exp(logweight), p**boostedDelta))
+
     logweight += boostedDelta * logp if x else np.log(-np.expm1(boostedDelta * logp))
 
-    thisBoost: np.ndarray = clampLerp(0.8 * previousHalflife, previousHalflife,
+    thisBoost: np.ndarray = clampLerp(0.8 * prevTimeHorizon, prevTimeHorizon,
                                       np.minimum(boost, 1.0), boost, t)
-    previousHalflife = previousHalflife * thisBoost
+    prevTimeHorizon = prevTimeHorizon * thisBoost
   weight = np.exp(logweight)
 
   mv = weightedMeanVar(weight, p)
   postBeta = _meanVarToBeta(mv['mean'], mv['var'])
-  model = (postBeta[0], postBeta[1], initHl)
+  model = (postBeta[0], postBeta[1], initHalflife)
   if returnDetails:
-    return model, dict(weight=weight, p=p, boost=boost)
+    return model, dict(weight=weight, p=p, boost=boost, logprecalls=np.log(precalls))
   return model
 
 

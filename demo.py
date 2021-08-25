@@ -31,6 +31,7 @@ import ebisu  # type: ignore
 import typing
 
 from utils import split_by, partition_by
+import boostedMonteCarloAnki as mcboost
 
 Model = tuple[float, float, float]
 Updater = typing.Callable[[Model, int, float, list[int], list[float]], Model]
@@ -94,8 +95,8 @@ def likelihoodHelper(dts_hours: list[float], results: list[int], initAlphaBeta: 
   This helper is a thin wrapper to `likelihood`.
   """
   model = (initAlphaBeta, initAlphaBeta, initHl)
-  updater: Updater = lambda model, result, df, _, _2: boostedUpdateModel(
-      model, df, result, baseBoost)
+  updater: Updater = lambda model, result, dt, _, _2: boostedUpdateModel(
+      model, dt, result, baseBoost)
   return likelihood(model, dts_hours, results, updater)
 
 
@@ -238,46 +239,76 @@ if __name__ == '__main__':
   train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
+  example_dt, example_results, _ = dfToVariables(train[0]['df'])
+  _, full = mcboost.post(
+      example_results,
+      example_dt,
+      2.0,
+      10.0,  #hours
+      1.4,
+      5.0,
+      nsamples=1_000_000,
+      returnDetails=True)
+
   import pylab as plt  # type: ignore
   plt.ion()
 
   # vary initial halflife and baseBoost amount
-  hl = np.logspace(0, 3, 50)
+  hl = np.logspace(0, 3, 10)
   boost = np.logspace(0, np.log10(2), 5)
 
   hls, boosts = np.meshgrid(hl, boost)
-  likelihoodsPerGroup: list[np.ndarray] = []
-  for group in tqdm(train):
+  likPerHlBoostGroup: list[np.ndarray] = []
+  likPerHlBoostGroupMonteCarlo: list[np.ndarray] = []
+  for group in tqdm(train[:2]):
     dts_hours, results, _ = dfToVariables(group['df'])
     initAlphaBeta = 2.0
     curriedLikelihood = lambda *args: likelihoodHelper(dts_hours, results, initAlphaBeta, *args)
 
     liks: np.ndarray = np.vectorize(curriedLikelihood)(hls, boosts)
-    likelihoodsPerGroup.append(liks)
+    likPerHlBoostGroup.append(liks)
+
+    def curriedMonteCarloLikelihood(initHl, boost):
+      boostBeta = 5.0
+      _, full = mcboost.post(
+          results,
+          dts_hours,
+          initAlphaBeta,
+          initHl,
+          boost,
+          boostBeta,
+          nsamples=1_000_000,
+          returnDetails=True)
+      return sum(full['logprecalls'])
+
+    likPerHlBoostGroupMonteCarlo.append(np.vectorize(curriedMonteCarloLikelihood)(hls, boosts))
 
   # Show some example results
-  exampleFig, exampleAxs = plt.subplots(3, 3)
-  for idx, (ax, lik, group) in enumerate(zip(exampleAxs.ravel(), likelihoodsPerGroup, train)):
-    ax.semilogx(hl, lik.T)
+  exampleFig, exampleAxs = plt.subplots(1, 2)
+  for idx, (ax, lik, mclik, group) in enumerate(
+      zip(exampleAxs.ravel(), likPerHlBoostGroup, likPerHlBoostGroupMonteCarlo, train)):
+    ax.semilogx(hl, lik.T, label=[f'boost={b:0.2f}' for b in boost])
+    ax.semilogx(hl, mclik.T, linestyle='dashed', label=[f'iboost={b:0.2f}' for b in boost])
+
     ax.set_xlabel('init halflife (hours)')
     ax.set_ylabel('log lik.')
     ax.grid()
     ax.set_title(f'{group["len"]} reviews, {group["fractionCorrect"]*100:0.1f}% correct')
     if idx == 0:
-      ax.legend([f'boost={b:0.2f}' for b in boost])
+      ax.legend()
   exampleFig.tight_layout()
   plt.savefig("examples.png", dpi=300)
   plt.savefig("examples.svg")
 
   # Aggregate all results
   fig, [ax1, ax2] = plt.subplots(2, 1)
-  ax1.plot(boost, np.vstack([np.max(x, axis=1) for x in likelihoodsPerGroup]).T)
+  ax1.plot(boost, np.vstack([np.max(x, axis=1) for x in likPerHlBoostGroup]).T)
   ax1.set_xlabel('baseBoost')
   ax1.set_ylabel('max log lik.')
   # fig.legend([f'{int(group["key"])}' for group in train])
   ax1.set_title('Likelihood, max over all init halflife')
 
-  ax2.semilogx(hl, sum(likelihoodsPerGroup).T)
+  ax2.semilogx(hl, sum(likPerHlBoostGroup).T)
   ax2.set_xlabel('initial halflife')
   ax2.set_ylabel('max likelihood')
   ax2.set_title('Likelihood, summed over all train cards')
