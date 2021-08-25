@@ -33,7 +33,7 @@ import typing
 from utils import split_by, partition_by
 
 Model = tuple[float, float, float]
-Updater = typing.Callable[[Model, int, float], Model]
+Updater = typing.Callable[[Model, int, float, list[int], list[float]], Model]
 
 
 def likelihood(initialModel: Model,
@@ -64,14 +64,14 @@ def likelihood(initialModel: Model,
   """
   model = initialModel
   logProbabilities: list[float] = []
-  for (dt, result) in zip(dts, results):
+  for idx, (dt, result) in enumerate(zip(dts, results)):
     boolResult = result > 1  # 1=fail in Anki, 2=hard, 3=normal, 4=easy
 
     logPredictedRecall = ebisu.predictRecall(model, dt)
     # Bernoulli trial's probability mass function: p if result=True, else 1-p, except in log
     logProbabilities.append(
         logPredictedRecall if boolResult else np.log(-np.expm1(logPredictedRecall)))
-    model = update(model, result, dt)
+    model = update(model, result, dt, results[:idx + 1], dts[:idx + 1])
     if verbose:
       print(f'model={model}')
 
@@ -94,7 +94,8 @@ def likelihoodHelper(dts_hours: list[float], results: list[int], initAlphaBeta: 
   This helper is a thin wrapper to `likelihood`.
   """
   model = (initAlphaBeta, initAlphaBeta, initHl)
-  updater: Updater = lambda model, result, df: boostedUpdateModel(model, df, result, baseBoost)
+  updater: Updater = lambda model, result, df, _, _2: boostedUpdateModel(
+      model, df, result, baseBoost)
   return likelihood(model, dts_hours, results, updater)
 
 
@@ -245,13 +246,13 @@ if __name__ == '__main__':
   boost = np.logspace(0, np.log10(2), 5)
 
   hls, boosts = np.meshgrid(hl, boost)
-  likelihoodsPerGroup = []
+  likelihoodsPerGroup: list[np.ndarray] = []
   for group in tqdm(train):
     dts_hours, results, _ = dfToVariables(group['df'])
     initAlphaBeta = 2.0
     curriedLikelihood = lambda *args: likelihoodHelper(dts_hours, results, initAlphaBeta, *args)
 
-    liks = np.vectorize(curriedLikelihood)(hls, boosts)
+    liks: np.ndarray = np.vectorize(curriedLikelihood)(hls, boosts)
     likelihoodsPerGroup.append(liks)
 
   # Show some example results

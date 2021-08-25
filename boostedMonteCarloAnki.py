@@ -1,12 +1,10 @@
 import typing
-import demo
 import numpy as np
 from scipy.stats import gamma as gammarv, beta as betarv  #type:ignore
 
 Farr = typing.Union[float, np.ndarray]
 
 
-# NOT REUSABLE! I assume things about y2 always being the ndarray
 def clampLerp(x1: np.ndarray, x2: np.ndarray, y1: np.ndarray, y2: np.ndarray, x: float):
   # Asssuming x1 <= x <= x2, map x from [x0, x1] to [0, 1]
   mu: Farr = (x - x1) / (x2 - x1)  # will be >=0 and <=1
@@ -25,13 +23,13 @@ def clampLerp(x1: np.ndarray, x2: np.ndarray, y1: np.ndarray, y2: np.ndarray, x:
   return ret
 
 
-def _meanVarToGamma(mean, var):
+def _meanVarToGamma(mean, var) -> tuple[float, float]:
   a = mean**2 / var
   b = mean / var
   return a, b
 
 
-def _meanVarToBeta(mean, var):
+def _meanVarToBeta(mean, var) -> tuple[float, float]:
   """Fit a Beta distribution to a mean and variance."""
   # [betaFit] https://en.wikipedia.org/w/index.php?title=Beta_distribution&oldid=774237683#Two_unknown_parameters
   tmp = mean * (1 - mean) / var - 1
@@ -50,8 +48,13 @@ def weightedMeanVar(w: Farr, x: Farr):
   return dict(mean=mean, var=var)
 
 
-def post(xs: list[int], ts: list[float], alphaBeta: float, initHalflife: float, boostMode: float,
-         boostBeta: float):
+def post(xs: list[int],
+         ts: list[float],
+         alphaBeta: float,
+         initHalflife: float,
+         boostMode: float,
+         boostBeta: float,
+         returnDetails=False):
   bools = [x > 1 for x in xs]
   N = 5_000_000
   p: np.ndarray = betarv.rvs(alphaBeta, alphaBeta, size=N)
@@ -59,7 +62,6 @@ def post(xs: list[int], ts: list[float], alphaBeta: float, initHalflife: float, 
   boostAlpha = boostBeta * boostMode + 1
   boost: np.ndarray = gammarv.rvs(boostAlpha, scale=1 / boostBeta, size=N)
 
-  # delta = np.array([t / (initHalflife * boost**(i)) for (i, t) in enumerate(ts)])
   logp = np.log(p)
   previousHalflife: np.ndarray = np.ones_like(boost) * initHalflife
   logweight: Farr = 0.0
@@ -71,10 +73,17 @@ def post(xs: list[int], ts: list[float], alphaBeta: float, initHalflife: float, 
                                       np.minimum(boost, 1.0), boost, t)
     previousHalflife = previousHalflife * thisBoost
   weight = np.exp(logweight)
-  return dict(weight=weight, p=p, boost=boost)
+
+  mv = weightedMeanVar(weight, p)
+  postBeta = _meanVarToBeta(mv['mean'], mv['var'])
+  model = (postBeta[0], postBeta[1], initHl)
+  if returnDetails:
+    return model, dict(weight=weight, p=p, boost=boost)
+  return model
 
 
 if __name__ == "__main__":
+  import demo
   df = demo.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
 
@@ -87,11 +96,9 @@ if __name__ == "__main__":
   boostMode = 1.4
   boostBeta = 10.0 / 3
   initAB = 2.0
-  res = post(results, dts_hours, initAB, initHl, boostMode, boostBeta)
+  model, res = post(results, dts_hours, initAB, initHl, boostMode, boostBeta, returnDetails=True)
   import ebisu  #type:ignore
-  mv = weightedMeanVar(res['weight'], res['p'])
-  postBeta = _meanVarToBeta(mv['mean'], mv['var'])
-  print('estimate of inital model:', ebisu.rescaleHalflife((postBeta[0], postBeta[1], initHl)))
+  print('estimate of inital model:', ebisu.rescaleHalflife(model))
 
   mv = weightedMeanVar(res['weight'], res['boost'])
   postGamma = _meanVarToGamma(mv['mean'], mv['var'])
