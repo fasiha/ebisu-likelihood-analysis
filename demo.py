@@ -30,7 +30,7 @@ import numpy as np
 import ebisu  # type: ignore
 import typing
 
-from utils import split_by, partition_by
+from utils import sequentialImportanceResample, split_by, partition_by
 import boostedMonteCarloAnki as mcboost
 
 Model = tuple[float, float, float]
@@ -239,8 +239,8 @@ if __name__ == '__main__':
   train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  example_dt, example_results, _ = dfToVariables(train[0]['df'])
-  _, full = mcboost.post(
+  example_dt, example_results, _ = dfToVariables(train[7]['df'])
+  model, full = mcboost.post(
       example_results,
       example_dt,
       2.0,
@@ -249,6 +249,18 @@ if __name__ == '__main__':
       5.0,
       nsamples=1_000_000,
       returnDetails=True)
+
+  sir, _ = sequentialImportanceResample(full['p'], full['weight'])
+
+  from scipy.stats import beta as betarv  #type:ignore
+  plt.figure()
+  plt.hist(full['p'], bins=40, alpha=0.5, label='init pRecall', density=True)
+  plt.hist(sir, bins=40, alpha=0.5, label='posterior pRecall', density=True)
+  p = np.linspace(0, 1, 1001)
+  plt.plot(p, betarv.pdf(p, model[0], model[1]), label='Beta fit')
+  plt.legend()
+
+  # raise Exception('check examples')
 
   import pylab as plt  # type: ignore
   plt.ion()
@@ -259,8 +271,8 @@ if __name__ == '__main__':
 
   hls, boosts = np.meshgrid(hl, boost)
   likPerHlBoostGroup: list[np.ndarray] = []
-  likPerHlBoostGroupMonteCarlo: list[np.ndarray] = []
-  for group in tqdm(train[:2]):
+  likPerHlBoostGroupMonteCarlo: list[float] = []
+  for group in tqdm(train):
     dts_hours, results, _ = dfToVariables(group['df'])
     initAlphaBeta = 2.0
     curriedLikelihood = lambda *args: likelihoodHelper(dts_hours, results, initAlphaBeta, *args)
@@ -268,7 +280,7 @@ if __name__ == '__main__':
     liks: np.ndarray = np.vectorize(curriedLikelihood)(hls, boosts)
     likPerHlBoostGroup.append(liks)
 
-    def curriedMonteCarloLikelihood(initHl, boost):
+    def curriedMonteCarloLikelihood(initHl, boost) -> float:
       boostBeta = 5.0
       _, full = mcboost.post(
           results,
@@ -281,14 +293,14 @@ if __name__ == '__main__':
           returnDetails=True)
       return sum(full['logprecalls'])
 
-    likPerHlBoostGroupMonteCarlo.append(np.vectorize(curriedMonteCarloLikelihood)(hls, boosts))
+    likPerHlBoostGroupMonteCarlo.append(curriedMonteCarloLikelihood(10., 1.5))
 
   # Show some example results
-  exampleFig, exampleAxs = plt.subplots(1, 2)
+  exampleFig, exampleAxs = plt.subplots(3, 3)
   for idx, (ax, lik, mclik, group) in enumerate(
       zip(exampleAxs.ravel(), likPerHlBoostGroup, likPerHlBoostGroupMonteCarlo, train)):
     ax.semilogx(hl, lik.T, label=[f'boost={b:0.2f}' for b in boost])
-    ax.semilogx(hl, mclik.T, linestyle='dashed', label=[f'iboost={b:0.2f}' for b in boost])
+    ax.semilogx([hl[0], hl[-1]], [mclik] * 2, linestyle='dashed', label=f'MC')
 
     ax.set_xlabel('init halflife (hours)')
     ax.set_ylabel('log lik.')

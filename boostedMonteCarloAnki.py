@@ -1,3 +1,4 @@
+import ebisu  #type:ignore
 import typing
 import numpy as np
 from scipy.stats import gamma as gammarv, beta as betarv  #type:ignore
@@ -67,11 +68,21 @@ def post(xs: list[int],
   prevTimeHorizon: np.ndarray = np.ones_like(boost) * initHalflife
   logweight = np.zeros_like(boost)
   precalls: list[float] = []
+  logprecallsEbisu: list[float] = []
   for x, t in zip(bools, ts):
     boostedDelta = t / prevTimeHorizon
 
     # not cheating here but need to move this to likelihood to ensure data isolation
-    precalls.append(weightedMean(np.exp(logweight), p**boostedDelta))
+    weight = np.exp(logweight)
+    # mv = weightedMeanVar(weight, p)
+    # postBeta = _meanVarToBeta(mv['mean'], mv['var'])
+    # meanHorizon = weightedMean(weight, prevTimeHorizon)
+    # model = (postBeta[0], postBeta[1], meanHorizon)
+    # logprecallsEbisu.append(ebisu.predictRecall(model, t))
+    # Above: this suffers from Jensen ineqality: collapsing horizon's richness to a mean
+    # This uses Monte Carlo to exactly represent the precall.
+    # They'll agree only for the first quiz.
+    precalls.append(weightedMean(weight, p**boostedDelta))
 
     logweight += boostedDelta * logp if x else np.log(-np.expm1(boostedDelta * logp))
 
@@ -82,9 +93,15 @@ def post(xs: list[int],
 
   mv = weightedMeanVar(weight, p)
   postBeta = _meanVarToBeta(mv['mean'], mv['var'])
-  model = (postBeta[0], postBeta[1], initHalflife)
+  meanHorizon = weightedMean(weight, prevTimeHorizon)
+  model = (postBeta[0], postBeta[1], meanHorizon)
   if returnDetails:
-    return model, dict(weight=weight, p=p, boost=boost, logprecalls=np.log(precalls))
+    return model, dict(
+        weight=weight,
+        p=p,
+        boost=boost,
+        logprecalls=np.log(precalls),
+        logprecallsEbisu=logprecallsEbisu)
   return model
 
 
@@ -103,7 +120,6 @@ if __name__ == "__main__":
   boostBeta = 10.0 / 3
   initAB = 2.0
   model, res = post(results, dts_hours, initAB, initHl, boostMode, boostBeta, returnDetails=True)
-  import ebisu  #type:ignore
   print('estimate of inital model:', ebisu.rescaleHalflife(model))
 
   mv = weightedMeanVar(res['weight'], res['boost'])

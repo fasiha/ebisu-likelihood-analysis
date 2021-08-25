@@ -1,8 +1,8 @@
+from utils import sequentialImportanceResample
 from dataclasses import dataclass
 from scipy.stats import gamma as gammarv  #type:ignore
 import numpy as np
 import matplotlib.pylab as plt  #type:ignore
-from scipy.stats import multinomial
 
 plt.ion()
 
@@ -29,21 +29,6 @@ def ebisuPosteriorSamples(samplesHalflife: np.ndarray, review: Review) -> np.nda
   pRecall = 2.0**(-review.studyGap / samplesHalflife)
   weights = pRecall if review.result else (1 - pRecall)
   return sequentialImportanceResample(samplesHalflife, weights)[0]
-
-
-def sequentialImportanceResample(particles: np.ndarray,
-                                 weights: np.ndarray,
-                                 N=None) -> tuple[np.ndarray, np.ndarray]:
-  if N is None:
-    N = len(particles)
-  draw: np.ndarray = multinomial(N, weights / np.sum(weights))
-  # each element of `draw` is an integer, the number of times the particle at that index should appear in the output
-
-  # this isn't going to be fast FIXME
-  newParticles = np.hstack(
-      [np.ones(repeat) * particle for repeat, particle in zip(draw, particles)])
-  newWeights = np.ones(N)
-  return (newParticles, newWeights)
 
 
 if __name__ == '__main__':
