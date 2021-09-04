@@ -7,6 +7,25 @@ import typing
 T = TypeVar('T')
 
 
+def weightedMean(w: np.ndarray, x: np.ndarray) -> float:
+  return np.sum(w * x) / np.sum(w)
+
+
+def weightedMeanVar(w: np.ndarray, x: np.ndarray) -> tuple[float, float]:
+  mean = weightedMean(w, x)
+  var = np.sum(w * (x - mean)**2) / np.sum(w)
+  return (mean, var)
+
+
+def meanVarToBeta(mean, var) -> tuple[float, float]:
+  """Fit a Beta distribution to a mean and variance."""
+  # [betaFit] https://en.wikipedia.org/w/index.php?title=Beta_distribution&oldid=774237683#Two_unknown_parameters
+  tmp = mean * (1 - mean) / var - 1
+  alpha = mean * tmp
+  beta = (1 - mean) * tmp
+  return alpha, beta
+
+
 def clampLerpFloat(x1: float, x2: float, y1: float, y2: float, x: float):
   mu = (x - x1) / (x2 - x1)  # will be >=0 and <=1
   # branchless: hoping it's faster (cache misses, etc.) than the equivalent:
