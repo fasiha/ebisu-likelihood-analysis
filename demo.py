@@ -30,7 +30,7 @@ import numpy as np
 import ebisu  # type: ignore
 import typing
 
-from utils import sequentialImportanceResample, split_by, partition_by
+from utils import sequentialImportanceResample, split_by, partition_by, clampLerpFloat
 import boostedMonteCarloAnki as mcboost
 
 Model = tuple[float, float, float]
@@ -173,9 +173,13 @@ def boostedUpdateModel(model: Model,
   assert extra >= 0
   baseBoosts = [0, 1.0, baseBoost - extra / 2, baseBoost, baseBoost + extra / 2]
 
+  oldHalflife: float = ebisu.modelToPercentileDecay(model)
   boolResult = result > 1
   newModel = ebisu.updateRecall(model, boolResult, 1, dt)
-  b = baseBoosts[result]
+  # newHalflife: float = ebisu.modelToPercentileDecay(newModel)
+
+  b = clampLerpFloat(0.8 * oldHalflife, oldHalflife, 1.0, baseBoosts[result], dt)
+
   boostedModel = ebisu.rescaleHalflife(newModel, b)
   if verbose:
     # `hlBoost` is how much Ebisu already boosted the halflife
@@ -239,6 +243,9 @@ if __name__ == '__main__':
   train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
+  import pylab as plt  # type: ignore
+  plt.ion()
+
   example_dt, example_results, _ = dfToVariables(train[7]['df'])
   model, full = mcboost.post(
       example_results,
@@ -262,9 +269,6 @@ if __name__ == '__main__':
 
   # raise Exception('check examples')
 
-  import pylab as plt  # type: ignore
-  plt.ion()
-
   # vary initial halflife and baseBoost amount
   hl = np.logspace(0, 3, 10)
   boost = np.logspace(0, np.log10(2), 5)
@@ -272,7 +276,7 @@ if __name__ == '__main__':
   hls, boosts = np.meshgrid(hl, boost)
   likPerHlBoostGroup: list[np.ndarray] = []
   likPerHlBoostGroupMonteCarlo: list[float] = []
-  for group in tqdm(train):
+  for group in tqdm(train[:10]):
     dts_hours, results, _ = dfToVariables(group['df'])
     initAlphaBeta = 2.0
     curriedLikelihood = lambda *args: likelihoodHelper(dts_hours, results, initAlphaBeta, *args)

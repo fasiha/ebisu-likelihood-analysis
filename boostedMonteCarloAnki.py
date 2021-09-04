@@ -10,11 +10,6 @@ Farr = typing.Union[float, np.ndarray]
 def clampLerp(x1: np.ndarray, x2: np.ndarray, y1: np.ndarray, y2: np.ndarray, x: float):
   # Asssuming x1 <= x <= x2, map x from [x0, x1] to [0, 1]
   mu: Farr = (x - x1) / (x2 - x1)  # will be >=0 and <=1
-  # branchless: hoping it's faster (cache misses, etc.) than the equivalent:
-  # `y1 if (x < x1) else y2 if (x > x2) else (y1 * (1 - mu) + y2 * mu)`
-  if type(mu) == float:
-    return (x < x1) * y1 + (x > x2) * y2 + (x1 <= x <= x2) * (y1 * (1 - mu) + y2 * mu)
-
   ret = np.empty_like(y2)
   idx = x < x1
   ret[idx] = y1[idx]
@@ -135,3 +130,7 @@ boostBeta = 10/3:
 estimate of inital model: (2.395692291697088, 2.395692291697088, 8.573529067668835)
 estimate of boost: 1.5118281149632586
 """
+
+#%%
+
+# %%

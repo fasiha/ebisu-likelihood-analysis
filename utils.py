@@ -2,8 +2,16 @@ from scipy.stats import multinomial  #type:ignore
 import numpy as np
 from typing import Callable, TypeVar
 from collections.abc import Iterable
+import typing
 
 T = TypeVar('T')
+
+
+def clampLerpFloat(x1: float, x2: float, y1: float, y2: float, x: float):
+  mu = (x - x1) / (x2 - x1)  # will be >=0 and <=1
+  # branchless: hoping it's faster (cache misses, etc.) than the equivalent:
+  # `y1 if (x < x1) else y2 if (x > x2) else (y1 * (1 - mu) + y2 * mu)`
+  return (x < x1) * y1 + (x > x2) * y2 + (x1 <= x <= x2) * (y1 * (1 - mu) + y2 * mu)
 
 
 def sequentialImportanceResample(particles: np.ndarray,
