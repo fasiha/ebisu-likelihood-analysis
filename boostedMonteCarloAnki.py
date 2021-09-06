@@ -115,7 +115,8 @@ if __name__ == "__main__":
   boostBeta = 10.0 / 3
   initAB = 2.0
   model, res = post(results, dts_hours, initAB, initHl, boostMode, boostBeta, returnDetails=True)
-  print('estimate of inital model:', ebisu.rescaleHalflife(model))
+  print('estimate of initial model:', ebisu.rescaleHalflife((model[0], model[1], initHl)))
+  print('estimate of final model:', ebisu.rescaleHalflife(model))
 
   mv = weightedMeanVar(res['weight'], res['boost'])
   postGamma = _meanVarToGamma(mv['mean'], mv['var'])
