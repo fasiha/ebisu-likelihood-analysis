@@ -1,3 +1,4 @@
+import demo
 import ebisu  #type:ignore
 import typing
 import numpy as np
@@ -100,28 +101,72 @@ def post(xs: list[int],
   return model
 
 
+def overlap(thisdf, thatdf):
+  hits = np.logical_and(
+      min(thatdf.timestamp) <= thisdf.timestamp, thisdf.timestamp <= max(thatdf.timestamp))
+  # `hits` is as long as `thisdf`
+  overlapFraction = sum(hits) / len(hits)
+
+  for t in thisdf.timestamp:
+    sum(thatdf.timestamp < t)
+
+  return overlapFraction
+
+
+def overlap2(thiscard: demo.Card, thatcard: demo.Card):
+  ts = np.array(thiscard.absts_hours)
+  hits = np.logical_and(min(thatcard.absts_hours) <= ts, ts <= max(thatcard.absts_hours))
+  # `hits` is as long as `thisdf`
+  overlapFraction = sum(hits) / len(hits)
+
+  dts_hours_that: list[typing.Union[None, float]] = []
+  thatts = np.array(thatcard.absts_hours)
+  for t in thiscard.absts_hours:
+    num = sum(thatts < t)
+    dts_hours_that.append(None if num == 0 else (t - thatcard.absts_hours[num - 1]))
+
+  return overlapFraction, dts_hours_that
+
+
 if __name__ == "__main__":
-  import demo
   df = demo.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
 
   train, _ = demo.traintest(df)
-  train = train[::10]  # further subdivide, for computational purposes
+  # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  dts_hours, results, _ = demo.dfToVariables(train[0]['df'])
   initHl = 0.25
   boostMode = 1.4
   boostBeta = 10.0 / 3
   initAB = 2.0
-  model, res = post(results, dts_hours, initAB, initHl, boostMode, boostBeta, returnDetails=True)
-  print('estimate of initial model:', ebisu.rescaleHalflife((model[0], model[1], initHl)))
-  print('estimate of final model:', ebisu.rescaleHalflife(model))
+  if True:
+    model, res = post(
+        train[0].results,
+        train[0].dts_hours,
+        initAB,
+        initHl,
+        boostMode,
+        boostBeta,
+        returnDetails=True)
+    print('estimate of initial model:', ebisu.rescaleHalflife((model[0], model[1], initHl)))
+    print('estimate of final model:', ebisu.rescaleHalflife(model))
 
-  mv = weightedMeanVar(res['weight'], res['boost'])
-  postGamma = _meanVarToGamma(mv['mean'], mv['var'])
-  postGammaMode = (postGamma[0] - 1) / postGamma[1]
-  print('estimate of boost:', postGammaMode)
+    mv = weightedMeanVar(res['weight'], res['boost'])
+    postGamma = _meanVarToGamma(mv['mean'], mv['var'])
+    postGammaMode = (postGamma[0] - 1) / postGamma[1]
+    print('estimate of boost:', postGammaMode)
+
+  thiscard = train[0]
+  thatcard = None
+  for t in train[1:]:
+    if overlap(thiscard.df, t.df) > 0.5:
+      thatcard = t
+      break
+  if thatcard:
+    print("ok!")
+
+  ts = [t for t in train if overlap(train[0].df, t.df) > 0.8 and overlap(t.df, train[0].df) > 0.5]
 """
 boostBeta = 10:
 estimate of inital model: (2.6759692857154893, 2.6759692857154893, 9.163320510417671)
