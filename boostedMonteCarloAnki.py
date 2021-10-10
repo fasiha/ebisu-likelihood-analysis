@@ -1,9 +1,9 @@
-import demo
+import utils
 import ebisu  #type:ignore
 import typing
 import numpy as np
 from scipy.stats import gamma as gammarv, beta as betarv  #type:ignore
-from scipy.special import logsumexp  #type:ignore
+from scipy.special import logsumexp, betaln  #type:ignore
 
 Farr = typing.Union[float, np.ndarray]
 
@@ -40,10 +40,105 @@ def weightedMean(w: Farr, x: Farr) -> float:
   return np.sum(w * x) / np.sum(w)
 
 
+def weightedMeanLogw(logw: np.ndarray, x: np.ndarray) -> np.ndarray:
+  return np.exp(logsumexp(logw, b=x) - logsumexp(logw))
+
+
+def weightedMeanVarLogw(logw: np.ndarray, x: np.ndarray):
+  logsumw = logsumexp(logw)
+  logmean = logsumexp(logw, b=x) - logsumw
+  mean = np.exp(logmean)
+  logvar = logsumexp(logw, b=(x - mean)**2) - logsumw
+  return (mean, np.exp(logvar))
+
+
+def gammafit(logw: np.ndarray, x: np.ndarray):
+  mean, var = weightedMeanVarLogw(logw, x)
+  a, b = _meanVarToGamma(mean, var)
+  mode = a / b
+  return dict(a=a, b=b, mean=mean, var=var, mode=mode)
+
+
+def betafit(logw: np.ndarray, x: np.ndarray):
+  mean, var = weightedMeanVarLogw(logw, x)
+  a, b = _meanVarToBeta(mean, var)
+  return dict(a=a, b=b, mean=mean, var=var)
+
+
 def weightedMeanVar(w: Farr, x: Farr):
   mean = weightedMean(w, x)
   var = np.sum(w * (x - mean)**2) / np.sum(w)
   return dict(mean=mean, var=var)
+
+
+def binomln(n, k):
+  "Log of scipy.special.binom calculated entirely in the log domain"
+  assert np.logical_and(0 <= k, k <= n).all(), "0 <= k <= n"
+  return -betaln(1 + n - k, 1 + k) - np.log(n + 1)
+
+
+def ankiFitEasyHard(xs: list[int],
+                    ts: list[float],
+                    hlMode: float,
+                    hlBeta: float,
+                    boostMode: float,
+                    boostBeta: float,
+                    size=100_000):
+  hlAlpha = hlBeta * hlMode + 1.0
+  hl0s: np.ndarray = gammarv.rvs(hlAlpha, scale=1.0 / hlBeta, size=size)
+
+  boostAlpha = boostBeta * boostMode + 1.0
+  boosts: np.ndarray = gammarv.rvs(boostAlpha, scale=1.0 / boostBeta, size=size)
+
+  hardFactors: np.ndarray = betarv.rvs(3.0, 2.0, size=size)  # 0 to 1
+  easyFactors: np.ndarray = betarv.rvs(2.0, 3.0, size=size)  # 0 to 1
+  easyHardTotal = 50
+
+  logweights = np.zeros(size)
+  hls = hl0s.copy()
+  for i, (x, t) in enumerate(zip(xs, ts)):
+    logps = -t / hls
+    if x == 1:  # failure
+      logweights += np.log(-np.expm1(logps))  # log(1-p) = log(1-exp(logp)) = log(-expm1(logp))
+    elif x == 3 or True:  # pass (normal)
+      logweights += logps  # log(p)
+    elif x == 2 or x == 4:  # hard or easy
+      n = easyHardTotal
+      if x == 2:
+        k = np.round(np.exp(logps) * easyHardTotal * hardFactors)
+      else:
+        ps = np.exp(logps)
+        k = np.round(easyHardTotal * (ps + (1 - ps) * easyFactors))
+      # print(np.mean(k))
+      logweights += binomln(n, k) + k * logps + (n - k) * np.log(-np.expm1(logps))
+      # binomial pdf: approximate the "p observed" as a scaled value
+    else:
+      raise Exception(f'unknown result {x}')
+
+    hls *= clampLerp(0.8 * hls, hls, np.minimum(boosts, 1.0), boosts, t)
+    # print(f' mean hl{i+1}={weightedMeanLogw(logweights, hls)}')
+  kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights))
+  # https://en.wikipedia.org/wiki/Effective_sample_size#Weighted_samples
+
+  print(
+      f'mean boost ={weightedMeanLogw(logweights, boosts):0.4g}, neff={kishEffectiveSampleSize:0.2g}, {gammafit(logweights, boosts)}'
+  )
+  print(
+      f'mean inithl={weightedMeanLogw(logweights, hl0s):0.4g}, neff={kishEffectiveSampleSize:0.2g}, {gammafit(logweights, hl0s)}'
+  )
+  print(
+      f'mean finlhl={weightedMeanLogw(logweights, hls):0.4g}, neff={kishEffectiveSampleSize:0.2g}, {gammafit(logweights, hls)}'
+  )
+  # print(
+  #     f'mean hardsc={weightedMeanLogw(logweights, hardFactors):0.4g}, {betafit(logweights, hardFactors)}'
+  # )
+
+  return dict(
+      logweights=logweights,
+      boosts=boosts,
+      hl0s=hl0s,
+      hardFactors=hardFactors,
+      kishEffectiveSampleSize=kishEffectiveSampleSize)
 
 
 def post(xs: list[int],
@@ -113,7 +208,7 @@ def overlap(thisdf, thatdf):
   return overlapFraction
 
 
-def overlap2(thiscard: demo.Card, thatcard: demo.Card):
+def overlap2(thiscard: utils.Card, thatcard: utils.Card):
   ts = np.array(thiscard.absts_hours)
   hits = np.logical_and(min(thatcard.absts_hours) <= ts, ts <= max(thatcard.absts_hours))
   # `hits` is as long as `thisdf`
@@ -129,10 +224,10 @@ def overlap2(thiscard: demo.Card, thatcard: demo.Card):
 
 
 if __name__ == "__main__":
-  df = demo.sqliteToDf('collection.anki2', True)
+  df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
 
-  train, _ = demo.traintest(df)
+  train, _ = utils.traintest(df)
   # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
@@ -141,6 +236,17 @@ if __name__ == "__main__":
   boostBeta = 10.0 / 3
   initAB = 2.0
   if True:
+    for t in train[0:3]:
+      res = ankiFitEasyHard(
+          t.results,
+          t.dts_hours,
+          hlMode=0.25,
+          hlBeta=10.0,
+          boostMode=1.5,
+          boostBeta=10.0,
+          size=1_000_000)
+      print('---')
+  if False:
     model, res = post(
         train[0].results,
         train[0].dts_hours,
@@ -166,7 +272,7 @@ if __name__ == "__main__":
   if thatcard:
     print("ok!")
 
-  ts = [t for t in train if overlap(train[0].df, t.df) > 0.8 and overlap(t.df, train[0].df) > 0.5]
+  # ts = [t for t in train if overlap(train[0].df, t.df) > 0.8 and overlap(t.df, train[0].df) > 0.5]
 """
 boostBeta = 10:
 estimate of inital model: (2.6759692857154893, 2.6759692857154893, 9.163320510417671)
@@ -176,7 +282,3 @@ boostBeta = 10/3:
 estimate of inital model: (2.395692291697088, 2.395692291697088, 8.573529067668835)
 estimate of boost: 1.5118281149632586
 """
-
-#%%
-
-# %%
