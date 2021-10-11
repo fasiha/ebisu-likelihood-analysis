@@ -7,7 +7,7 @@ functions {
 }
 data {
   int<lower=0> T;
-  array[T] int<lower=0,upper=1> x;
+  array[T] int x;
   array[T] real<lower=0> t;
 }
 parameters {
@@ -16,17 +16,27 @@ parameters {
 }
 transformed parameters {
   array[T] real<lower=0> hl;
-  hl[1] = hl0; # halflife for quiz 1
+  hl[1] = hl0; // halflife for quiz 1
   for (n in 2:T){
     hl[n] = hl[n-1] * clampLerp(0.8 * hl[n-1], hl[n-1], fmin(1.0, boost), boost, t[n-1]);
+  }
+
+  array[T] real<lower=0, upper=1> prob;
+  for (n in 1:T) {
+    prob[n] = exp(-t[n] / hl[n]);
   }
 }
 model {
   hl0 ~ gamma(10 * 0.25 + 1, 10.0);
   boost ~ gamma(10 * 1.4 + 1, 10.0);
 
-  // x ~ bernoulli(exp(-1 * t / hl));
-  for (n in 1:T){
-    x[n] ~ bernoulli(exp(-t[n] / hl[n]));
+  for (n in 1:T) {
+    if (x[n]==1 || x[n]==3) { // fail or pass
+      int xx = x[n] > 1;
+      xx ~ bernoulli(prob[n]);
+    } else { // hard or easy
+      int xx = x[n] < 3 ? 1 : 2;
+      xx ~ binomial(2, prob[n]);
+    }
   }
 }

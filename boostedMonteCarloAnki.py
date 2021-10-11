@@ -82,12 +82,17 @@ def ankiFitEasyHardStan(xs: list[int], ts: list[float]):
   import json
   from cmdstanpy import CmdStanModel  #type:ignore
 
-  data = dict(T=len(xs), x=[1 if x > 1 else 0 for x in xs], t=ts)
+  data = dict(T=len(xs), x=[int(x) for x in xs], t=ts)
   with open('ankiFitEasyHard.json', 'w') as fid:
     json.dump(data, fid)
 
   model = CmdStanModel(stan_file="ankiFitEasyHard.stan")
-  fit = model.sample(data="ankiFitEasyHard.json", chains=2, iter_sampling=100_000)
+  fit = model.sample(
+      data="ankiFitEasyHard.json",
+      chains=2,
+      iter_warmup=50_000,
+      iter_sampling=50_000,
+      show_progress=True)
   return fit
 
 
@@ -253,6 +258,7 @@ if __name__ == "__main__":
   boostBeta = 10.0 / 3
   initAB = 2.0
   if True:
+    fits = []
     for t in train[0:1]:
       res = ankiFitEasyHard(
           t.results,
@@ -263,14 +269,17 @@ if __name__ == "__main__":
           boostBeta=10.0,
           size=100_000)
       fit = ankiFitEasyHardStan(t.results, t.dts_hours)
+      fits.append(fit)
+      print(fit.summary())
       print(fit.diagnose())
       fitdf = pd.DataFrame({
           k: v.ravel()
           for k, v in fit.stan_variables().items()
           if 1 == len([s for s in v.shape if s > 1])
       })
-      pd.plotting.scatter_matrix(fitdf.sample(10_000))
+      pd.plotting.scatter_matrix(fitdf.sample(2_000))
       print('---')
+
   if False:
     model, res = post(
         train[0].results,
