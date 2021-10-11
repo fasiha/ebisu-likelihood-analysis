@@ -4,6 +4,7 @@ import typing
 import numpy as np
 from scipy.stats import gamma as gammarv, beta as betarv  #type:ignore
 from scipy.special import logsumexp, betaln  #type:ignore
+import pandas as pd  #type:ignore
 
 Farr = typing.Union[float, np.ndarray]
 
@@ -75,6 +76,19 @@ def binomln(n, k):
   "Log of scipy.special.binom calculated entirely in the log domain"
   assert np.logical_and(0 <= k, k <= n).all(), "0 <= k <= n"
   return -betaln(1 + n - k, 1 + k) - np.log(n + 1)
+
+
+def ankiFitEasyHardStan(xs: list[int], ts: list[float]):
+  import json
+  from cmdstanpy import CmdStanModel  #type:ignore
+
+  data = dict(T=len(xs), x=[1 if x > 1 else 0 for x in xs], t=ts)
+  with open('ankiFitEasyHard.json', 'w') as fid:
+    json.dump(data, fid)
+
+  model = CmdStanModel(stan_file="ankiFitEasyHard.stan")
+  fit = model.sample(data="ankiFitEasyHard.json", chains=2, iter_sampling=100_000)
+  return fit
 
 
 def ankiFitEasyHard(xs: list[int],
@@ -224,6 +238,9 @@ def overlap2(thiscard: utils.Card, thatcard: utils.Card):
 
 
 if __name__ == "__main__":
+  import pylab as plt  #type:ignore
+  plt.ion()
+
   df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
 
@@ -236,7 +253,7 @@ if __name__ == "__main__":
   boostBeta = 10.0 / 3
   initAB = 2.0
   if True:
-    for t in train[0:3]:
+    for t in train[0:1]:
       res = ankiFitEasyHard(
           t.results,
           t.dts_hours,
@@ -244,7 +261,15 @@ if __name__ == "__main__":
           hlBeta=10.0,
           boostMode=1.5,
           boostBeta=10.0,
-          size=1_000_000)
+          size=100_000)
+      fit = ankiFitEasyHardStan(t.results, t.dts_hours)
+      print(fit.diagnose())
+      fitdf = pd.DataFrame({
+          k: v.ravel()
+          for k, v in fit.stan_variables().items()
+          if 1 == len([s for s in v.shape if s > 1])
+      })
+      pd.plotting.scatter_matrix(fitdf.sample(10_000))
       print('---')
   if False:
     model, res = post(
