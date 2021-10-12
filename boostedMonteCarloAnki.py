@@ -242,6 +242,10 @@ def overlap2(thiscard: utils.Card, thatcard: utils.Card):
   return overlapFraction, dts_hours_that
 
 
+def summary(t: utils.Card):
+  print("\n".join([f'{x}@{t:0.2f} {"🔥" if x<2 else ""}' for x, t in zip(t.results, t.dts_hours)]))
+
+
 if __name__ == "__main__":
   import pylab as plt  #type:ignore
   plt.ion()
@@ -249,25 +253,19 @@ if __name__ == "__main__":
   df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
 
-  train, _ = utils.traintest(df)
+  train, TEST_TRAIN = utils.traintest(df)
   # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  initHl = 0.25
-  boostMode = 1.4
-  boostBeta = 10.0 / 3
-  initAB = 2.0
+  if False:
+    g = df[df.cid == 1300038031016].copy()
+    dts_hours, results, ts_hours = utils.dfToVariables(g)
+    print("\n".join([f'{x}@{t:0.2f} {"🔥" if x<2 else ""}' for x, t in zip(results, dts_hours)]))
+    raise Exception('')
+
   if True:
     fits = []
-    for t in [train[0], train[2]]:
-      res = ankiFitEasyHard(
-          t.results,
-          t.dts_hours,
-          hlMode=0.25,
-          hlBeta=10.0,
-          boostMode=1.5,
-          boostBeta=10.0,
-          size=100_000)
+    for t in train[:3]:
       fit = ankiFitEasyHardStan(t.results, t.dts_hours)
       fits.append(fit)
       print(fit.summary())
@@ -289,32 +287,15 @@ if __name__ == "__main__":
       print('---')
 
   if False:
-    model, res = post(
-        train[0].results,
-        train[0].dts_hours,
-        initAB,
-        initHl,
-        boostMode,
-        boostBeta,
-        returnDetails=True)
-    print('estimate of initial model:', ebisu.rescaleHalflife((model[0], model[1], initHl)))
-    print('estimate of final model:', ebisu.rescaleHalflife(model))
-
-    mv = weightedMeanVar(res['weight'], res['boost'])
-    postGamma = _meanVarToGamma(mv['mean'], mv['var'])
-    postGammaMode = (postGamma[0] - 1) / postGamma[1]
-    print('estimate of boost:', postGammaMode)
-
-  thiscard = train[0]
-  thatcard = None
-  for t in train[1:]:
-    if overlap(thiscard.df, t.df) > 0.5:
-      thatcard = t
-      break
-  if thatcard:
-    print("ok!")
-
-  # ts = [t for t in train if overlap(train[0].df, t.df) > 0.8 and overlap(t.df, train[0].df) > 0.5]
+    thiscard = train[0]
+    thatcard = None
+    for t in train[1:]:
+      if overlap(thiscard.df, t.df) > 0.5:
+        thatcard = t
+        break
+    if thatcard:
+      print("ok!")
+    # ts = [t for t in train if overlap(train[0].df, t.df) > 0.8 and overlap(t.df, train[0].df) > 0.5]
 """
 # For train[2]
 NO easy/hard

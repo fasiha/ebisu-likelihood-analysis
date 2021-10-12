@@ -51,7 +51,7 @@ def sequentialImportanceResample(particles: np.ndarray,
 
 
 def split_by(split_pred: Callable[[T, list[T]], bool], lst: Iterable[T]) -> list[list[T]]:
-  "Allows each element to decide if it wants to be in previous partition"
+  "Allows each element to decide if it wants to not be in previous partition"
   lst = iter(lst)
   try:
     x = next(lst)
@@ -106,9 +106,13 @@ def traintest(inputDf, minQuiz=5, minFractionCorrect=0.67):
     # unexpected results"
     # https://pandas.pydata.org/pandas-docs/stable/user_guide/groupby.html#transformation
     sortedDf = df.copy().sort_values('timestamp')
+
     dts_hours, results, absts_hours = dfToVariables(sortedDf)
+    if len(results) < minQuiz:
+      continue
+
     fractionCorrect = np.mean(np.array(results) > 1)
-    if len(results) < minQuiz or fractionCorrect < minFractionCorrect:
+    if fractionCorrect < minFractionCorrect:
       continue
 
     allGroups.append(
@@ -157,32 +161,38 @@ def dfToVariables(g):
   """
   assert g.timestamp.is_monotonic_increasing
   hour_per_millisecond = 1 / 3600e3
-  # drop the first quiz (that's our "learning" case)
-  # delta time between this quiz and the previous quiz/study
-  dts_hours: list[float] = np.diff(g.timestamp.values.astype('datetime64[ms]')).astype(
-      'timedelta64[ms]').astype(float) * hour_per_millisecond
   # 1-4: results of quiz
-  results: list[int] = g.ease.values[1:]
+  results: list[int] = g.ease.values
   # absolute time of this quiz
-  ts_hours = g.timestamp.values[1:].astype('datetime64[ms]').astype('timedelta64[ms]').astype(
-      float) * hour_per_millisecond
+  ts_hours: list[float] = g.timestamp.values.astype('datetime64[ms]').astype(
+      'timedelta64[ms]').astype(float) * hour_per_millisecond
 
   ret = []
-  for partition in partition_by(lambda dt_res: dt_res[1] > 1, zip(dts_hours, results, ts_hours)):
-    # `partition_by` splits up the list of `(dt, result)` tuples into sub-lists where each
-    # `partition` is all successes or all failures.
-    # SO: `partition[0][1]` is "the first reivew's result" (1 through 4).
-    first_result = partition[0][1] > 1  # boolean
-    if first_result or len(partition) <= 1:
-      # either this chunk of reviews are all successes or there's only one failure
-      ret.extend(partition)
+  HOUR_WINDOW = 4.0
+  for group in split_by(lambda rev, revs: (rev[1] - revs[-1][1]) > HOUR_WINDOW,
+                        zip(results, ts_hours)):
+    # each `group` contains a list of reviews that all happened in the same HOUR_WINDOW window.
+    # Anki only does daily-ish reviews so reviews this close together must have happened due to a failure.
+    # We want to clean up those.
+
+    # See https://stackoverflow.com/a/8534381
+    failure = next(((result, t) for result, t in group if result == 1), None)
+
+    if failure:
+      # In general, this group will be [fail, pass] or maybe [pass, fail, pass] (if I accidentally clicked "pass" at first).
+      # Add only the first failure in this HOUR_WINDOW-group of reviews
+      ret.append(failure)
     else:
-      # failure, and more than one of them in a row. Group them within a time period
-      GROUP_FAILURE_TIME_HOURS = 0.5
-      splits = split_by(lambda v, vs: (v[0] - vs[0][0]) >= GROUP_FAILURE_TIME_HOURS, partition)
-      # Then for each group of timed-clusters, pick the last one
-      ret.extend([split[-1] for split in splits])
-  dts_hours, results, ts_hours = zip(*ret)
+      # add all reviews in this HOUR_WINDOW-group because all were successes.
+      # In reality this group will most likely be 1-element long
+      ret.extend(group)
+
+  results, ts_hours = zip(*ret)
+  # drop the first quiz (that's our "learning" case)
+  # delta time between this quiz and the previous quiz/study
+  dts_hours = np.diff(ts_hours).tolist()
+  ts_hours = ts_hours[1:]
+  results = results[1:]
 
   return dts_hours, results, ts_hours
 
