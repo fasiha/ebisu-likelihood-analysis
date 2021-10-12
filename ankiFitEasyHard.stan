@@ -13,14 +13,14 @@ data {
 parameters {
   real<lower=0> hl0;
   real<lower=0> boost;
-  real<lower=0, upper=1> clampLeft;
-  real<lower=0> clampWidth;
+  // real<lower=0, upper=1> clampLeft;
+  // real<lower=0> clampWidth;
 }
 transformed parameters {
   array[T] real<lower=0> hl;
   hl[1] = hl0; // halflife for quiz 1
   for (n in 2:T){
-    hl[n] = hl[n-1] * clampLerp(clampLeft * hl[n-1], (clampLeft + clampWidth) * hl[n-1], fmin(1.0, boost), boost, t[n-1]);
+    hl[n] = hl[n-1] * clampLerp(0.8 * hl[n-1], (0.8 + 0.2) * hl[n-1], fmin(1.0, boost), boost, t[n-1]);
   }
 
   array[T] real<lower=0, upper=1> prob;
@@ -29,8 +29,8 @@ transformed parameters {
   }
 }
 model {
-  clampLeft ~ beta(1, 1);
-  clampWidth ~ exponential(0.5);
+  // clampLeft ~ beta(1, 1);
+  // clampWidth ~ exponential(0.5);
   hl0 ~ gamma(10 * 0.25 + 1, 10.0);
   boost ~ gamma(10 * 1.4 + 1, 10.0);
 

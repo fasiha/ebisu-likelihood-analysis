@@ -265,7 +265,8 @@ if __name__ == "__main__":
 
   if True:
     fits = []
-    for t in train[:3]:
+    subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in [0.7, 0.8, 0.9]]
+    for t in subtrain:
       fit = ankiFitEasyHardStan(t.results, t.dts_hours)
       fits.append(fit)
       print(fit.summary())
@@ -275,7 +276,6 @@ if __name__ == "__main__":
           for k, v in fit.stan_variables().items()
           if 1 == len([s for s in v.shape if s > 1])
       })
-      pd.plotting.scatter_matrix(fitdf, hist_kwds=dict(bins=100))
       print('median:',
             fitdf.median().values, 'lp median:', np.median(fit.method_variables()["lp__"], axis=0))
       print("\n".join([
@@ -283,6 +283,7 @@ if __name__ == "__main__":
           for x, t, p in zip(t.results, t.dts_hours,
                              fit.stan_variables()['prob'].mean(axis=0))
       ]))
+      pd.plotting.scatter_matrix(fitdf, hist_kwds=dict(bins=100))
 
       print('---')
 
