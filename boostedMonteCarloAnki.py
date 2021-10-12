@@ -259,7 +259,7 @@ if __name__ == "__main__":
   initAB = 2.0
   if True:
     fits = []
-    for t in [train[2]]:
+    for t in [train[0], train[2]]:
       res = ankiFitEasyHard(
           t.results,
           t.dts_hours,
@@ -268,7 +268,7 @@ if __name__ == "__main__":
           boostMode=1.5,
           boostBeta=10.0,
           size=100_000)
-      fit = ankiFitEasyHardStan(t.results[:4], t.dts_hours[:4])
+      fit = ankiFitEasyHardStan(t.results, t.dts_hours)
       fits.append(fit)
       print(fit.summary())
       print(fit.diagnose())
@@ -277,9 +277,15 @@ if __name__ == "__main__":
           for k, v in fit.stan_variables().items()
           if 1 == len([s for s in v.shape if s > 1])
       })
-      pd.plotting.scatter_matrix(fitdf.sample(2_000))
+      pd.plotting.scatter_matrix(fitdf, hist_kwds=dict(bins=100))
       print('median:',
             fitdf.median().values, 'lp median:', np.median(fit.method_variables()["lp__"], axis=0))
+      print("\n".join([
+          f'{x}@{t:0.2f} {p:0.2f}{"🔥" if x<2 else ""}'
+          for x, t, p in zip(t.results, t.dts_hours,
+                             fit.stan_variables()['prob'].mean(axis=0))
+      ]))
+
       print('---')
 
   if False:
@@ -321,11 +327,18 @@ BINOMIAL only easy=2 of 2
 median: [2.89488  3.472195] lp median: [-88.52505 -88.5313 ]
 
 
-# For first 4 quizzes in train[2]
-no easy/hard
-median: [2.421725 1.495335] lp median: [-51.4051  -51.40185]
+clamping left value, uninformative prior between 0 and 1: median -> 0.8! Huh.
 
-easy=3/3, hard=2/3 binomial
-median: [2.318805 1.34905 ] lp median: [-60.2273 -60.2219]
+clampleft and clampwidth:
+median: [2.81087  3.2101   0.650987 2.678775] lp median: [-152.252  -152.2855]
 
+clampWidth only (clampLeft=0.8)
+median: [2.804665 3.21721  2.153885] lp median: [-150.236 -150.224]
+
+# train[0]
+clampleft and clampwidth:
+median: [1.649785  1.98162   0.41851   0.8821025] lp median: [-83.5881 -83.5535]
+
+clampWidth only (clampLeft=0.8)
+median: [1.660475 2.050365 0.652474] lp median: [-81.9799  -81.96575]
 """
