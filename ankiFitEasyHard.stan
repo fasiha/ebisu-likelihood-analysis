@@ -31,12 +31,13 @@ model {
   boost ~ gamma(10 * 1.4 + 1, 10.0);
 
   for (n in 1:T) {
+    // if (x[n]<=4) { // ALL
     if (x[n]==1 || x[n]==3) { // fail or pass
       int xx = x[n] > 1;
       xx ~ bernoulli(prob[n]);
     } else { // hard or easy
-      int xx = x[n] < 3 ? 1 : 2;
-      xx ~ binomial(2, prob[n]);
+      int xx = 2;
+      xx ~ binomial(x[n] < 3 ? 3 : 2, prob[n]);
     }
   }
 }

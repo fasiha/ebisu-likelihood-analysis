@@ -259,7 +259,7 @@ if __name__ == "__main__":
   initAB = 2.0
   if True:
     fits = []
-    for t in train[0:1]:
+    for t in [train[2]]:
       res = ankiFitEasyHard(
           t.results,
           t.dts_hours,
@@ -268,7 +268,7 @@ if __name__ == "__main__":
           boostMode=1.5,
           boostBeta=10.0,
           size=100_000)
-      fit = ankiFitEasyHardStan(t.results, t.dts_hours)
+      fit = ankiFitEasyHardStan(t.results[:4], t.dts_hours[:4])
       fits.append(fit)
       print(fit.summary())
       print(fit.diagnose())
@@ -278,6 +278,8 @@ if __name__ == "__main__":
           if 1 == len([s for s in v.shape if s > 1])
       })
       pd.plotting.scatter_matrix(fitdf.sample(2_000))
+      print('median:',
+            fitdf.median().values, 'lp median:', np.median(fit.method_variables()["lp__"], axis=0))
       print('---')
 
   if False:
@@ -308,11 +310,22 @@ if __name__ == "__main__":
 
   # ts = [t for t in train if overlap(train[0].df, t.df) > 0.8 and overlap(t.df, train[0].df) > 0.5]
 """
-boostBeta = 10:
-estimate of inital model: (2.6759692857154893, 2.6759692857154893, 9.163320510417671)
-estimate of boost: 1.477778729146228
+# For train[2]
+NO easy/hard
+median: [2.89923 3.38762] lp median: [-87.5495  -87.56525]
 
-boostBeta = 10/3:
-estimate of inital model: (2.395692291697088, 2.395692291697088, 8.573529067668835)
-estimate of boost: 1.5118281149632586
+BINOMIAL: hard=1, easy=2, out of 2
+median: [2.84198  3.169745] lp median: [-149.881 -149.89 ]
+
+BINOMIAL only easy=2 of 2
+median: [2.89488  3.472195] lp median: [-88.52505 -88.5313 ]
+
+
+# For first 4 quizzes in train[2]
+no easy/hard
+median: [2.421725 1.495335] lp median: [-51.4051  -51.40185]
+
+easy=3/3, hard=2/3 binomial
+median: [2.318805 1.34905 ] lp median: [-60.2273 -60.2219]
+
 """
