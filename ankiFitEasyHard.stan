@@ -31,8 +31,10 @@ transformed parameters {
 model {
   // clampLeft ~ beta(1, 1);
   // clampWidth ~ exponential(0.5);
-  hl0 ~ gamma(10 * 0.25 + 1, 10.0);
-  boost ~ gamma(10 * 1.4 + 1, 10.0);
+  // hl0 ~ gamma(10 * 0.25 + 1, 10.0);
+  // boost ~ gamma(10 * 1.4 + 1, 10.0);
+  hl0 ~ exponential(0.5);
+  boost ~ exponential(1.0);
 
   for (n in 1:T) {
     if (x[n]<=4) { // ALL

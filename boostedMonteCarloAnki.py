@@ -78,6 +78,80 @@ def binomln(n, k):
   return -betaln(1 + n - k, 1 + k) - np.log(n + 1)
 
 
+def ankiFitEasyHardQuad(xs: list[int], ts: list[float], priors):
+  from math import prod
+
+  def clampLerp2(x1, x2, y1, y2, x):
+    if x <= x1:
+      return y1
+    if x >= x2:
+      return y2
+    mu = (x - x1) / (x2 - x1)
+    return (y1 * (1 - mu) + y2 * mu)
+
+  def gammaIntegrand(b, h, expectation):
+    ab = 10 * 1.4 + 1
+    bb = 10.0
+    ah = 10 * .25 + 1
+    bh = 10.0
+
+    prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
+
+    lik = np.ones_like(prior)
+    hs = [h]
+    for t in ts[1:]:
+      old = hs[-1]
+      hs.append(old * b)
+      # hs.append(old * clampLerp2(0.8 * old, old, np.minimum(b, 1.0), b, t))
+    lik *= np.exp(sum([-t / h for x, t, h in zip(xs, ts, hs) if x > 1]))
+    lik *= prod([1 - np.exp(-t / h) for x, t, h in zip(xs, ts, hs) if x <= 1])
+    if expectation == '':
+      extra = 1.0
+    elif expectation == 'b':
+      extra = b
+    elif expectation == 'h':
+      extra = h
+    else:
+      raise Exception('unknown expectation')
+    return extra * lik * prior
+
+  def expIntegrand(b, h, expectation):
+    bb = 1.0
+    bh = 0.5
+    prior = np.exp(-bb * b - bh * h)
+    # same as above
+    lik = np.ones_like(prior)
+    hs = [h]
+    for t in ts[1:]:
+      old = hs[-1]
+      hs.append(old * b)
+      # hs.append(old * clampLerp2(0.8 * old, old, np.minimum(b, 1.0), b, t))
+    lik *= np.exp(sum([-t / h for x, t, h in zip(xs, ts, hs) if x > 1]))
+    lik *= prod([1 - np.exp(-t / h) for x, t, h in zip(xs, ts, hs) if x <= 1])
+    if expectation == '':
+      extra = 1.0
+    elif expectation == 'b':
+      extra = b
+    elif expectation == 'h':
+      extra = h
+    else:
+      raise Exception('unknown expectation')
+    return extra * lik * prior
+
+  from scipy.integrate import dblquad  #type:ignore
+  if priors == 'gamma':
+    integrand = gammaIntegrand
+  elif priors == 'exp':
+    integrand = expIntegrand
+  else:
+    raise Exception('unknown prior ' + priors)
+
+  den = dblquad(lambda a, b: integrand(a, b, ''), 0, np.inf, 0, np.inf, epsabs=1e-10, epsrel=1e-10)
+  eb = dblquad(lambda a, b: integrand(a, b, 'b'), 0, np.inf, 0, np.inf, epsabs=1e-10, epsrel=1e-10)
+  eh = dblquad(lambda a, b: integrand(a, b, 'h'), 0, np.inf, 0, np.inf, epsabs=1e-10, epsrel=1e-10)
+  return dict(den=den, eb=eb, eh=eh)
+
+
 def ankiFitEasyHardStan(xs: list[int], ts: list[float]):
   import json
   from cmdstanpy import CmdStanModel  #type:ignore
@@ -90,8 +164,9 @@ def ankiFitEasyHardStan(xs: list[int], ts: list[float]):
   fit = model.sample(
       data="ankiFitEasyHard.json",
       chains=2,
-      iter_warmup=50_000,
-      iter_sampling=50_000,
+      iter_warmup=30_000,
+      iter_sampling=60_000,
+      adapt_delta=0.98,
       show_progress=True)
   return fit
 
@@ -250,6 +325,16 @@ if __name__ == "__main__":
   import pylab as plt  #type:ignore
   plt.ion()
 
+  exp = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'exp')
+  print('exp')
+  print(exp)
+  print(dict(eb=exp['eb'][0] / exp['den'][0], eh=exp['eh'][0] / exp['den'][0]))
+
+  gam = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'gamma')
+  print('gamma')
+  print(gam)
+  print(dict(eb=gam['eb'][0] / gam['den'][0], eh=gam['eh'][0] / gam['den'][0]))
+
   df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
 
@@ -263,9 +348,11 @@ if __name__ == "__main__":
     print("\n".join([f'{x}@{t:0.2f} {"🔥" if x<2 else ""}' for x, t in zip(results, dts_hours)]))
     raise Exception('')
 
-  if True:
+  if False:
     fits = []
-    subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in [0.7, 0.8, 0.9]]
+    fracs = [0.7, 0.8, 0.9]
+    fracs = [0.7]
+    subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     for t in subtrain:
       fit = ankiFitEasyHardStan(t.results, t.dts_hours)
       fits.append(fit)
