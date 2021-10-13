@@ -78,7 +78,7 @@ def binomln(n, k):
   return -betaln(1 + n - k, 1 + k) - np.log(n + 1)
 
 
-def ankiFitEasyHardQuad(xs: list[int], ts: list[float], priors):
+def ankiFitEasyHardQuad(xs: list[int], ts: list[float], priors, clamp):
   from math import prod
 
   def clampLerp2(x1, x2, y1, y2, x):
@@ -89,43 +89,29 @@ def ankiFitEasyHardQuad(xs: list[int], ts: list[float], priors):
     mu = (x - x1) / (x2 - x1)
     return (y1 * (1 - mu) + y2 * mu)
 
-  def gammaIntegrand(b, h, expectation):
-    ab = 10 * 1.4 + 1
-    bb = 10.0
-    ah = 10 * .25 + 1
-    bh = 10.0
+  def integrand(b, h, expectation):
+    if priors == 'gamma':
+      ab = 10 * 1.4 + 1
+      bb = 10.0
+      ah = 10 * .25 + 1
+      bh = 10.0
 
-    prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
-
-    lik = np.ones_like(prior)
-    hs = [h]
-    for t in ts[1:]:
-      old = hs[-1]
-      hs.append(old * b)
-      # hs.append(old * clampLerp2(0.8 * old, old, np.minimum(b, 1.0), b, t))
-    lik *= np.exp(sum([-t / h for x, t, h in zip(xs, ts, hs) if x > 1]))
-    lik *= prod([1 - np.exp(-t / h) for x, t, h in zip(xs, ts, hs) if x <= 1])
-    if expectation == '':
-      extra = 1.0
-    elif expectation == 'b':
-      extra = b
-    elif expectation == 'h':
-      extra = h
+      prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
+    elif priors == 'exp':
+      bb = 1.0
+      bh = 0.5
+      prior = np.exp(-bb * b - bh * h)
     else:
-      raise Exception('unknown expectation')
-    return extra * lik * prior
+      raise Exception('unknown priors')
 
-  def expIntegrand(b, h, expectation):
-    bb = 1.0
-    bh = 0.5
-    prior = np.exp(-bb * b - bh * h)
-    # same as above
     lik = np.ones_like(prior)
     hs = [h]
     for t in ts[1:]:
       old = hs[-1]
-      hs.append(old * b)
-      # hs.append(old * clampLerp2(0.8 * old, old, np.minimum(b, 1.0), b, t))
+      if clamp:
+        hs.append(old * clampLerp2(0.8 * old, old, np.minimum(b, 1.0), b, t))
+      else:
+        hs.append(old * b)
     lik *= np.exp(sum([-t / h for x, t, h in zip(xs, ts, hs) if x > 1]))
     lik *= prod([1 - np.exp(-t / h) for x, t, h in zip(xs, ts, hs) if x <= 1])
     if expectation == '':
@@ -139,17 +125,63 @@ def ankiFitEasyHardQuad(xs: list[int], ts: list[float], priors):
     return extra * lik * prior
 
   from scipy.integrate import dblquad  #type:ignore
-  if priors == 'gamma':
-    integrand = gammaIntegrand
-  elif priors == 'exp':
-    integrand = expIntegrand
-  else:
-    raise Exception('unknown prior ' + priors)
 
   den = dblquad(lambda a, b: integrand(a, b, ''), 0, np.inf, 0, np.inf, epsabs=1e-10, epsrel=1e-10)
   eb = dblquad(lambda a, b: integrand(a, b, 'b'), 0, np.inf, 0, np.inf, epsabs=1e-10, epsrel=1e-10)
   eh = dblquad(lambda a, b: integrand(a, b, 'h'), 0, np.inf, 0, np.inf, epsabs=1e-10, epsrel=1e-10)
-  return dict(den=den, eb=eb, eh=eh)
+  return dict(eb=eb[0] / den[0], eh=eh[0] / den[0], quad=dict(den=den, eb=eb, eh=eh))
+
+
+def ankiFitEasyHardMpmath(xs: list[int], ts: list[float], priors, clamp):
+  from math import prod
+  import mpmath as mp  # type:ignore
+
+  def clampLerp2(x1, x2, y1, y2, x):
+    if x <= x1:
+      return y1
+    if x >= x2:
+      return y2
+    mu = (x - x1) / (x2 - x1)
+    return (y1 * (1 - mu) + y2 * mu)
+
+  def integrand(b, h, expectation):
+    if priors == 'gamma':
+      ab = 10 * 1.4 + 1
+      bb = 10.0
+      ah = 10 * .25 + 1
+      bh = 10.0
+
+      prior = b**(ab - 1) * mp.exp(-bb * b - bh * h) * h**(ah - 1)
+    elif priors == 'exp':
+      bb = 1.0
+      bh = 0.5
+      prior = mp.exp(-bb * b - bh * h)
+    else:
+      raise Exception('unknown priors')
+    lik = 1
+    hs = [h]
+    for t in ts[1:]:
+      old = hs[-1]
+      if clamp:
+        hs.append(old * clampLerp2(0.8 * old, old, min(b, 1.0), b, t))
+      else:
+        hs.append(old * b)
+    lik *= mp.exp(sum([-t / h for x, t, h in zip(xs, ts, hs) if x > 1]))
+    lik *= prod([1 - mp.exp(-t / h) for x, t, h in zip(xs, ts, hs) if x <= 1])
+    if expectation == '':
+      extra = 1.0
+    elif expectation == 'b':
+      extra = b
+    elif expectation == 'h':
+      extra = h
+    else:
+      raise Exception('unknown expectation')
+    return extra * lik * prior
+
+  den = mp.quadgl(lambda a, b: integrand(a, b, ''), [0, mp.inf], [0, mp.inf], error=True)
+  eb = mp.quadgl(lambda a, b: integrand(a, b, 'b'), [0, mp.inf], [0, mp.inf], error=True)
+  eh = mp.quadgl(lambda a, b: integrand(a, b, 'h'), [0, mp.inf], [0, mp.inf], error=True)
+  return dict(eb=eb[0] / den[0], eh=eh[0] / den[0], quad=dict(den=den, eb=eb, eh=eh))
 
 
 def ankiFitEasyHardStan(xs: list[int], ts: list[float]):
@@ -325,15 +357,27 @@ if __name__ == "__main__":
   import pylab as plt  #type:ignore
   plt.ion()
 
-  exp = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'exp')
-  print('exp')
-  print(exp)
-  print(dict(eb=exp['eb'][0] / exp['den'][0], eh=exp['eh'][0] / exp['den'][0]))
+  toErr = lambda d: {k: v[1] for k, v in d.items()}
 
-  gam = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'gamma')
-  print('gamma')
+  print('# MPMATH')
+  expmp = ankiFitEasyHardMpmath([3, 3, 3], [0.9, 3.3, 14.5], 'exp', False)
+  print('## exp')
+  print(expmp)
+
+  gammp = ankiFitEasyHardMpmath([3, 3, 3], [0.9, 3.3, 14.5], 'gamma', False)
+  print('## gam')
+  print(gammp)
+
+  print('# SCIPY')
+  exp = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'exp', False)
+  print('## exp')
+  print(exp)
+
+  gam = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'gamma', False)
+  print('## gamma')
   print(gam)
-  print(dict(eb=gam['eb'][0] / gam['den'][0], eh=gam['eh'][0] / gam['den'][0]))
+
+  ##
 
   df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
