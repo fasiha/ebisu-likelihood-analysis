@@ -124,7 +124,7 @@ def ankiFitEasyHardQuad(xs: list[int], ts: list[float], priors, clamp):
       raise Exception('unknown expectation')
     return extra * lik * prior
 
-  from scipy.integrate import dblquad  #type:ignore
+  from scipy.integrate import dblquad, nquad  #type:ignore
 
   den = dblquad(lambda a, b: integrand(a, b, ''), 0, np.inf, 0, np.inf, epsabs=1e-10, epsrel=1e-10)
   eb = dblquad(lambda a, b: integrand(a, b, 'b'), 0, np.inf, 0, np.inf, epsabs=1e-10, epsrel=1e-10)
@@ -132,9 +132,10 @@ def ankiFitEasyHardQuad(xs: list[int], ts: list[float], priors, clamp):
   return dict(eb=eb[0] / den[0], eh=eh[0] / den[0], quad=dict(den=den, eb=eb, eh=eh))
 
 
-def ankiFitEasyHardMpmath(xs: list[int], ts: list[float], priors, clamp):
+def ankiFitEasyHardMpmath(xs: list[int], ts: list[float], priors, clamp, dps=15):
   from math import prod
   import mpmath as mp  # type:ignore
+  mp.mp.dps = dps
 
   def clampLerp2(x1, x2, y1, y2, x):
     if x <= x1:
@@ -353,31 +354,29 @@ def summary(t: utils.Card):
   print("\n".join([f'{x}@{t:0.2f} {"🔥" if x<2 else ""}' for x, t in zip(t.results, t.dts_hours)]))
 
 
-if __name__ == "__main__":
-  import pylab as plt  #type:ignore
-  plt.ion()
-
-  toErr = lambda d: {k: v[1] for k, v in d.items()}
-
+def testquad():
   print('# MPMATH')
-  expmp = ankiFitEasyHardMpmath([3, 3, 3], [0.9, 3.3, 14.5], 'exp', False)
+  expmp = ankiFitEasyHardMpmath([3, 3, 3], [0.9, 3.3, 14.5], 'exp', True)
   print('## exp')
   print(expmp)
 
-  gammp = ankiFitEasyHardMpmath([3, 3, 3], [0.9, 3.3, 14.5], 'gamma', False)
+  gammp = ankiFitEasyHardMpmath([3, 3, 3], [0.9, 3.3, 14.5], 'gamma', True)
   print('## gam')
   print(gammp)
 
   print('# SCIPY')
-  exp = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'exp', False)
+  exp = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'exp', True)
   print('## exp')
   print(exp)
 
-  gam = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'gamma', False)
+  gam = ankiFitEasyHardQuad([3, 3, 3], [0.9, 3.3, 14.5], 'gamma', True)
   print('## gamma')
   print(gam)
 
-  ##
+
+if __name__ == "__main__":
+  import pylab as plt  #type:ignore
+  plt.ion()
 
   df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
@@ -386,6 +385,16 @@ if __name__ == "__main__":
   # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
+  if True:
+    fracs = [0.7, 0.8, 0.9]
+    subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
+    reses = []
+    for t in subtrain:
+      res = ankiFitEasyHardMpmath(t.results, t.dts_hours, 'gamma', True, dps=30)
+      print(res)
+      reses.append(res)
+
+    testquad()
   if False:
     g = df[df.cid == 1300038031016].copy()
     dts_hours, results, ts_hours = utils.dfToVariables(g)
@@ -454,4 +463,55 @@ median: [1.649785  1.98162   0.41851   0.8821025] lp median: [-83.5881 -83.5535]
 
 clampWidth only (clampLeft=0.8)
 median: [1.660475 2.050365 0.652474] lp median: [-81.9799  -81.96575]
+"""
+"""TOY DATA
+
+no clamp:
+
+# MPMATH
+## exp
+{'eb': mpf('2.8634392862906148'), 'eh': mpf('4.7606810766369136'), 'quad': {'den': (mpf('0.056114811374196646'), mpf('1.0e-19')), 'eb': (mpf('0.16068135543166212'), mpf('1.0e-21')), 'eh': (mpf('0.26714472062818784'), mpf('1.0e-19'))}}
+## gam
+{'eb': mpf('2.3173210884391482'), 'eh': mpf('0.94378028824502802'), 'quad': {'den': (mpf('2.3525200533613245e-12'), mpf('1.0e-17')), 'eb': (mpf('5.451544330630188e-12'), mpf('1.0e-22')), 'eh': (mpf('2.2202620540635595e-12'), mpf('1.0e-17'))}}
+# SCIPY
+## exp
+{'eb': 2.8634392862916513, 'eh': 4.760681076637943, 'quad': {'den': (0.056114811374175996, 9.980147706392323e-11), 'eb': (0.16068135543166115, 9.96352802156054e-11), 'eh': (0.26714472062814726, 9.80622793033094e-11)}}
+## gamma
+{'eb': 2.3171043781014133, 'eh': 0.9439202808031762, 'quad': {'den': (2.35086222804235e-12, 5.2123119808928056e-12), 'eb': (5.447193160910173e-12, 1.2216277034852655e-11), 'eh': (2.2190265344233156e-12, 4.589201991469663e-12)}}
+
+WITH clamp:
+
+# MPMATH
+## exp
+{'eb': mpf('2.923423191378165'), 'eh': mpf('4.2658585890674985'), 'quad': {'den': (mpf('0.038266724598723378'), mpf('1.0e-5')), 'eb': (mpf('0.11186983014998923'), mpf('1.0e-5')), 'eh': (mpf('0.16324043580494466'), mpf('1.0e-5'))}}
+## gam
+{'eb': mpf('2.3173210916402449'), 'eh': mpf('0.94378027504609563'), 'quad': {'den': (mpf('2.3525200439207764e-12'), mpf('1.0e-17')), 'eb': (mpf('5.4515443162840505e-12'), mpf('1.0e-22')), 'eh': (mpf('2.2202620141030033e-12'), mpf('1.0e-17'))}}
+# SCIPY
+/Users/fasih/Dropbox/Anki/likelihood-demo/lib/python3.9/site-packages/scipy/integrate/quadpack.py:879: IntegrationWarning: The maximum number of subdivisions (50) has been achieved.
+  If increasing the limit yields no improvement it is advised to analyze 
+  the integrand in order to determine the difficulties.  If the position of a 
+  local difficulty can be determined (singularity, discontinuity) one will 
+  probably gain from splitting up the interval and calling the integrator 
+  on the subranges.  Perhaps a special-purpose integrator should be used.
+  quad_r = quad(f, low, high, args=args, full_output=self.full_output,
+## exp
+{'eb': 2.9231658425494307, 'eh': 4.265681801997901, 'quad': {'den': (0.038225211702996725, 1.2266907273146143e-10), 'eb': (0.11173863317442079, 1.4428062950480765e-08), 'eh': (0.1630565899389903, 9.985758454321393e-10)}}
+## gamma
+{'eb': 2.317104378233146, 'eh': 0.9439202799611425, 'quad': {'den': (2.350862227404872e-12, 5.2123119808928056e-12), 'eb': (5.447193159742755e-12, 1.2216277034852655e-11), 'eh': (2.219026531842082e-12, 4.589201991469663e-12)}}
+"""
+""" SUBTRAIN, mpmath, dps=15
+# gamma
+{'eb': mpf('4.4371327827181259'), 'eh': mpf('0.76835326467461573'), 'quad': {'den': (mpf('9.6323905210106289e-19'), mpf('9.6323905049456013e-19')), 'eb': (mpf('4.2740195756719594e-18'), mpf('4.2740195630239893e-18')), 'eh': (mpf('7.40107870343934e-19'), mpf('7.4010786936491187e-19'))}}
+{'eb': mpf('4.9033380875508898'), 'eh': mpf('0.67982918147402172'), 'quad': {'den': (mpf('1.0682441316238334e-22'), mpf('1.0682441207038355e-22')), 'eb': (mpf('5.2379621373938687e-22'), mpf('5.2379620514209078e-22')), 'eh': (mpf('7.2622353361625778e-23'), mpf('7.2622352666211345e-23'))}}
+{'eb': mpf('4.903351273843529'), 'eh': mpf('1.6269537178728586'), 'quad': {'den': (mpf('1.5916704896764054e-33'), mpf('1.5916704583850888e-33')), 'eb': (mpf('7.8045195230939558e-33'), mpf('7.8045192767379419e-33')), 'eh': (mpf('2.5895742208075411e-33'), mpf('2.58957416990099e-33'))}}
+
+# exp
+{'eb': mpf('3.4017221073207571'), 'eh': mpf('4.1995335093012054'), 'quad': {'den': (mpf('0.00025732638102475168'), mpf('1.0e-5')), 'eb': (mpf('0.00087535283912874233'), mpf('1.0e-5')), 'eh': (mpf('0.0010806507599406545'), mpf('1.0e-6'))}}
+{'eb': mpf('3.2443691267612786'), 'eh': mpf('5.0666280535106907'), 'quad': {'den': (mpf('1.0480515787537876e-6'), mpf('1.0e-7')), 'eb': (mpf('3.4002661853622052e-6'), mpf('1.0e-6')), 'eh': (mpf('5.3100875304401095e-6'), mpf('1.0e-10'))}}
+{'eb': mpf('5.1497050501036155'), 'eh': mpf('11.973957434125394'), 'quad': {'den': (mpf('1.4393492914181767e-8'), mpf('1.0e-8')), 'eb': (mpf('7.4122243148792456e-8'), mpf('1.0e-8')), 'eh': (mpf('1.7234707148279795e-7'), mpf('1.0e-7'))}}
+
+# gamma with dps=30
+{'eb': mpf('2.68826746659870445439388775173029'), 'eh': mpf('0.997113671423464195401819981491926'), 'quad': {'den': (mpf('2.61854221433326359644004729975889e-15'), mpf('1.0e-16')), 'eb': (mpf('7.03934184470744429565169183660199e-15'), mpf('1.0e-16')), 'eh': (mpf('2.61098424111116815397533360916485e-15'), mpf('1.0e-21'))}}
+{'eb': mpf('2.6572217819552988780875320152'), 'eh': mpf('1.14993761558596158437532741216667'), 'quad': {'den': (mpf('1.13648074522571051421397568593537e-18'), mpf('1.0e-20')), 'eb': (mpf('3.01988139098654852045228984811882e-18'), mpf('1.0e-19')), 'eh': (mpf('1.30688195832421024348015294746962e-18'), mpf('1.0e-20'))}}
+{'eb': mpf('4.90335127384352915968144148996443'), 'eh': mpf('1.6269537178728587811268130839529'), 'quad': {'den': (mpf('1.59167048967640526473350890292076e-33'), mpf('1.59167045838508876451360035613473e-33')), 'eb': (mpf('7.80451952309395558354143951001413e-33'), mpf('7.80451927673794189640474678188905e-33')), 'eh': (mpf('2.58957422080754123623101615132951e-33'), mpf('2.58957416990099003651163933055161e-33'))}}
 """
