@@ -192,6 +192,52 @@ def ankiFitEasyHardMpmath(xs: list[int], ts: list[float], priors, clamp, dps=15)
   return dict(eb=eb[0] / den[0], eh=eh[0] / den[0], quad=dict(den=den, eb=eb, eh=eh))
 
 
+def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp):
+  from math import prod
+
+  def clampLerp2(x1, x2, y1, y2, x):
+    if x <= x1:
+      return y1
+    if x >= x2:
+      return y2
+    mu = (x - x1) / (x2 - x1)
+    return (y1 * (1 - mu) + y2 * mu)
+
+  def posterior(b, h):
+    if priors == 'gamma':
+      ab = 10 * 1.4 + 1
+      bb = 10.0
+      ah = 10 * .25 + 1
+      bh = 10.0
+
+      prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
+    elif priors == 'exp':
+      bb = 1.0
+      bh = 0.5
+      prior = np.exp(-bb * b - bh * h)
+    else:
+      raise Exception('unknown priors')
+    lik = 1
+    hs = [h]
+    for t in ts[1:]:
+      old = hs[-1]
+      if clamp:
+        hs.append(old * clampLerp2(0.8 * old, old, min(b, 1.0), b, t))
+      else:
+        hs.append(old * b)
+    lik *= np.exp(sum([-t / h for x, t, h in zip(xs, ts, hs) if x > 1]))
+    lik *= prod([1 - np.exp(-t / h) for x, t, h in zip(xs, ts, hs) if x <= 1])
+    return lik * prior
+
+  bvec = np.linspace(0.5, 5)
+  hvec = np.linspace(0.5, 5)
+  f = np.vectorize(posterior)
+  bmat, hmat = np.meshgrid(bvec, hvec)
+  res = f(bmat, hmat)
+
+  return dict(res=res, bvec=bvec, hvec=hvec, bmat=bmat, hmat=hmat)
+
+
 def ankiFitEasyHardStan(xs: list[int], ts: list[float]):
   import json
   from cmdstanpy import CmdStanModel  #type:ignore
@@ -392,7 +438,22 @@ if __name__ == "__main__":
   # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  if True:
+  def imshow(x, y, z, ax=plt):
+
+    def extents(f):
+      delta = f[1] - f[0]
+      return [f[0] - delta / 2, f[-1] + delta / 2]
+
+    ax.imshow(
+        z, aspect='auto', interpolation='none', extent=extents(x) + extents(y), origin='lower')
+
+  res = ankiFitEasyHardMAP([3, 3, 3], [0.9, 3.3, 14.5], 'gamma', True)
+  fig, ax = plt.subplots()
+  imshow(res['bvec'], res['hvec'], res['res'], ax=ax)
+  ax.set_xlabel('boost')
+  ax.set_ylabel('init halflife')
+
+  if False:
     fracs = [0.7, 0.8, 0.9]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
