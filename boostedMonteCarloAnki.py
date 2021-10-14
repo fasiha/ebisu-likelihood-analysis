@@ -193,7 +193,7 @@ def ankiFitEasyHardMpmath(xs: list[int], ts: list[float], priors, clamp, dps=15)
 
 
 def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp):
-  from math import prod
+  from math import fsum
 
   def clampLerp2(x1, x2, y1, y2, x):
     if x <= x1:
@@ -204,20 +204,23 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp):
     return (y1 * (1 - mu) + y2 * mu)
 
   def posterior(b, h):
+    logb = np.log(b)
+    logh = np.log(h)
     if priors == 'gamma':
       ab = 10 * 1.4 + 1
       bb = 10.0
       ah = 10 * .25 + 1
       bh = 10.0
 
-      prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
+      logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
+      # prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
     elif priors == 'exp':
       bb = 1.0
       bh = 0.5
-      prior = np.exp(-bb * b - bh * h)
+      logprior = -bb * b - bh * h
+      # prior = np.exp(-bb * b - bh * h)
     else:
       raise Exception('unknown priors')
-    lik = 1
     hs = [h]
     for t in ts[1:]:
       old = hs[-1]
@@ -225,17 +228,39 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp):
         hs.append(old * clampLerp2(0.8 * old, old, min(b, 1.0), b, t))
       else:
         hs.append(old * b)
-    lik *= np.exp(sum([-t / h for x, t, h in zip(xs, ts, hs) if x > 1]))
-    lik *= prod([1 - np.exp(-t / h) for x, t, h in zip(xs, ts, hs) if x <= 1])
-    return lik * prior
+    # lik = 1
+    # lik *= np.exp(sum([-t / h for x, t, h in zip(xs, ts, hs) if x > 1]))
+    # lik *= prod([1 - np.exp(-t / h) for x, t, h in zip(xs, ts, hs) if x <= 1])
+    loglik = [-t / h if x > 1 else np.log(-np.expm1(-t / h)) for x, t, h in zip(xs, ts, hs)]
 
-  bvec = np.linspace(0.5, 5)
-  hvec = np.linspace(0.5, 5)
+    return fsum(loglik + [logprior])
+
+  bvec = np.linspace(0.5, 5, 101)
+  hvec = np.linspace(0.5, 5, 101)
   f = np.vectorize(posterior)
   bmat, hmat = np.meshgrid(bvec, hvec)
-  res = f(bmat, hmat)
+  z = f(bmat, hmat)
 
-  return dict(res=res, bvec=bvec, hvec=hvec, bmat=bmat, hmat=hmat)
+  import pylab as plt  #types:ignore
+  rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
+
+  def imshow(x, y, z, ax=plt):
+
+    def extents(f):
+      delta = f[1] - f[0]
+      return [f[0] - delta / 2, f[-1] + delta / 2]
+
+    return ax.imshow(
+        z, aspect='auto', interpolation='none', extent=extents(x) + extents(y), origin='lower')
+
+  fig, ax = plt.subplots()
+  im = imshow(bvec, hvec, z, ax=ax)
+  ax.set_xlabel('boost')
+  ax.set_ylabel('init halflife')
+  fig.colorbar(im)
+  rescalec(im, 20)
+
+  return dict(z=z, bvec=bvec, hvec=hvec, bmat=bmat, hmat=hmat, fig=fig, ax=ax, im=im)
 
 
 def ankiFitEasyHardStan(xs: list[int], ts: list[float]):
@@ -438,20 +463,15 @@ if __name__ == "__main__":
   # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  def imshow(x, y, z, ax=plt):
+  rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
 
-    def extents(f):
-      delta = f[1] - f[0]
-      return [f[0] - delta / 2, f[-1] + delta / 2]
-
-    ax.imshow(
-        z, aspect='auto', interpolation='none', extent=extents(x) + extents(y), origin='lower')
-
-  res = ankiFitEasyHardMAP([3, 3, 3], [0.9, 3.3, 14.5], 'gamma', True)
-  fig, ax = plt.subplots()
-  imshow(res['bvec'], res['hvec'], res['res'], ax=ax)
-  ax.set_xlabel('boost')
-  ax.set_ylabel('init halflife')
+  if True:
+    fracs = [0.7, 0.8, 0.9]
+    subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
+    reses = []
+    for t in subtrain:
+      res = ankiFitEasyHardMAP(t.results, t.dts_hours, 'gamma', True)
+      reses.append(res)
 
   if False:
     fracs = [0.7, 0.8, 0.9]
