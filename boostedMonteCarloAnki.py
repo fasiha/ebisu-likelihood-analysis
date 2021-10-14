@@ -147,16 +147,18 @@ def ankiFitEasyHardMpmath(xs: list[int], ts: list[float], priors, clamp, dps=15)
 
   def integrand(b, h, expectation):
     if priors == 'gamma':
-      ab = 10 * 1.4 + 1
-      bb = 10.0
-      ah = 10 * .25 + 1
-      bh = 10.0
+      ab = 2 * 1.4 + 1
+      bb = 2.0
+      ah = 2 * .25 + 1
+      bh = 2.0
 
-      prior = b**(ab - 1) * mp.exp(-bb * b - bh * h) * h**(ah - 1)
+      mkconstant = lambda a, b: b**a / mp.gamma(a)
+      prior = mkconstant(ab, bb) * mkconstant(ah, bh) * (
+          b**(ab - 1) * mp.exp(-bb * b - bh * h) * h**(ah - 1))
     elif priors == 'exp':
       bb = 1.0
       bh = 0.5
-      prior = mp.exp(-bb * b - bh * h)
+      prior = bb * bh * mp.exp(-bb * b - bh * h)
     else:
       raise Exception('unknown priors')
     lik = 1
@@ -179,9 +181,14 @@ def ankiFitEasyHardMpmath(xs: list[int], ts: list[float], priors, clamp, dps=15)
       raise Exception('unknown expectation')
     return extra * lik * prior
 
-  den = mp.quadgl(lambda a, b: integrand(a, b, ''), [0, mp.inf], [0, mp.inf], error=True)
-  eb = mp.quadgl(lambda a, b: integrand(a, b, 'b'), [0, mp.inf], [0, mp.inf], error=True)
-  eh = mp.quadgl(lambda a, b: integrand(a, b, 'h'), [0, mp.inf], [0, mp.inf], error=True)
+  maxdegree = 8
+  print('maxdegree=', maxdegree)
+  den = mp.quad(
+      lambda a, b: integrand(a, b, ''), [0, mp.inf], [0, mp.inf], error=True, maxdegree=maxdegree)
+  eb = mp.quad(
+      lambda a, b: integrand(a, b, 'b'), [0, mp.inf], [0, mp.inf], error=True, maxdegree=maxdegree)
+  eh = mp.quad(
+      lambda a, b: integrand(a, b, 'h'), [0, mp.inf], [0, mp.inf], error=True, maxdegree=maxdegree)
   return dict(eb=eb[0] / den[0], eh=eh[0] / den[0], quad=dict(den=den, eb=eb, eh=eh))
 
 
@@ -390,11 +397,11 @@ if __name__ == "__main__":
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
     for t in subtrain:
-      res = ankiFitEasyHardMpmath(t.results, t.dts_hours, 'gamma', True, dps=30)
+      res = ankiFitEasyHardMpmath(t.results, t.dts_hours, 'gamma', True, dps=15)
       print(res)
       reses.append(res)
 
-    testquad()
+    # testquad()
   if False:
     g = df[df.cid == 1300038031016].copy()
     dts_hours, results, ts_hours = utils.dfToVariables(g)
@@ -509,6 +516,22 @@ WITH clamp:
 {'eb': mpf('3.6798252065763015'), 'eh': mpf('1.935061359161069'), 'quad': {'den': (mpf('6.2364835275217659e-6'), mpf('1.0e-7')), 'eb': (mpf('2.2949169284972484e-5'), mpf('1.0e-6')), 'eh': (mpf('1.2067978291151887e-5'), mpf('1.0e-6'))}}
 {'eb': mpf('3.6281375019261355'), 'eh': mpf('2.267483752144944'), 'quad': {'den': (mpf('1.3272549552559431e-8'), mpf('1.0e-8')), 'eb': (mpf('4.8154634777813824e-8'), mpf('1.0e-8')), 'eh': (mpf('3.0095290459967159e-8'), mpf('1.0e-8'))}}
 {'eb': mpf('4.8364182702505127'), 'eh': mpf('5.2203842564821343'), 'quad': {'den': (mpf('2.8800361355635346e-13'), mpf('1.0e-13')), 'eb': (mpf('1.3929059385021162e-12'), mpf('1.0e-12')), 'eh': (mpf('1.5034895300195523e-12'), mpf('1.0e-12'))}}
+same but with constants:
+{'eb': mpf('3.6798252031421286'), 'eh': mpf('1.9350613563697521'), 'quad': {'den': (mpf('5.9060159273508187e-5'), mpf('1.0e-6')), 'eb': (mpf('0.00021733106259624372'), mpf('1.0e-5')), 'eh': (mpf('0.00011428503191120834'), mpf('1.0e-5'))}}
+{'eb': mpf('3.6281366143368046'), 'eh': mpf('2.2674831973395406'), 'quad': {'den': (mpf('1.2569248005731195e-7'), mpf('1.0e-8')), 'eb': (mpf('4.5602948904273211e-7'), mpf('1.0e-7')), 'eh': (mpf('2.8500558656189017e-7'), mpf('1.0e-7'))}}
+{'eb': mpf('4.9247464287717575'), 'eh': mpf('5.3421612382820909'), 'quad': {'den': (mpf('2.6784386871115843e-12'), mpf('1.0e-12')), 'eb': (mpf('1.319063135903689e-11'), mpf('1.0e-11')), 'eh': (mpf('1.4308651333402678e-11'), mpf('1.0e-11'))}}
+constants don't seem to help reduce error at default dps
+same with quad instead of quadgl:
+{'eb': mpf('3.6863879855795738'), 'eh': mpf('1.9331212015853561'), 'quad': {'den': (mpf('6.0602899280021719e-5'), mpf('1.0e-6')), 'eb': (mpf('0.00022340579979716107'), mpf('1.0e-6')), 'eh': (mpf('0.00011715274947575189'), mpf('1.0e-6'))}}
+{'eb': mpf('3.6347629269971375'), 'eh': mpf('2.3236293230633454'), 'quad': {'den': (mpf('1.2958862497152868e-7'), mpf('1.0e-9')), 'eb': (mpf('4.7102392980704791e-7'), mpf('1.0e-8')), 'eh': (mpf('3.0111592891930289e-7'), mpf('1.0e-12'))}}
+{'eb': mpf('5.0798360098663444'), 'eh': mpf('5.47481627443267'), 'quad': {'den': (mpf('2.7162668149647606e-12'), mpf('1.0e-16')), 'eb': (mpf('1.3798189979062953e-11'), mpf('1.0e-11')), 'eh': (mpf('1.4871061764270465e-11'), mpf('1.0e-11'))}}
+quad with maxdegrees=8 MUCH SLOWER:
+maxdegree= 8
+{'eb': mpf('3.6818011722301374'), 'eh': mpf('1.9361193310793698'), 'quad': {'den': (mpf('5.9801860438925261e-5'), mpf('1.0e-10')), 'eb': (mpf('0.0002201785598655781'), mpf('1.0e-10')), 'eh': (mpf('0.00011578353803031381'), mpf('1.0e-9'))}}
+maxdegree= 8
+{'eb': mpf('3.6788346049551319'), 'eh': mpf('2.3253028836372853'), 'quad': {'den': (mpf('1.2756315246058749e-7'), mpf('1.0e-9')), 'eb': (mpf('4.6928373958917662e-7'), mpf('1.0e-9')), 'eh': (mpf('2.9662296626246674e-7'), mpf('1.0e-10'))}}
+maxdegree= 8
+{'eb': mpf('4.977199148961355'), 'eh': mpf('5.3926403252507749'), 'quad': {'den': (mpf('2.8154877546231069e-12'), mpf('1.0e-13')), 'eb': (mpf('1.4013243256221243e-11'), mpf('1.0e-13')), 'eh': (mpf('1.5182912800830325e-11'), mpf('1.0e-13'))}}
 
 # exp
 {'eb': mpf('3.4017221073207571'), 'eh': mpf('4.1995335093012054'), 'quad': {'den': (mpf('0.00025732638102475168'), mpf('1.0e-5')), 'eb': (mpf('0.00087535283912874233'), mpf('1.0e-5')), 'eh': (mpf('0.0010806507599406545'), mpf('1.0e-6'))}}
