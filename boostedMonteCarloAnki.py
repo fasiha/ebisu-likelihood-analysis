@@ -217,7 +217,7 @@ def makeHalflives(b, h, ts, clamp, left, right):
   return hs
 
 
-def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, left, right):
+def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, left, right, bh):
   from math import fsum
 
   def posterior(b, h, extra=False):
@@ -226,14 +226,12 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, 
     if priors == 'gamma':
       ab = 2 * 1.4 + 1
       bb = 2.0
-      ah = 2 * .25 + 1
-      bh = 2.0
+      ah = bh * .25 + 1
 
       logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
       # prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
     elif priors == 'exp':
       bb = 1.0
-      bh = 0.5
       logprior = -bb * b - bh * h
       # prior = np.exp(-bb * b - bh * h)
     else:
@@ -261,8 +259,8 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, 
       return dict(logposterior=logposterior, loglikelihood=fsum(loglik), logprior=logprior)
     return logposterior
 
-  bvec = np.linspace(0.5, 15, 101)
-  hvec = np.linspace(0.1, 15, 101)
+  bvec = np.linspace(0.5, 15, 301)
+  hvec = np.linspace(0.1, 48, 301)
   f = np.vectorize(posterior)
   bmat, hmat = np.meshgrid(bvec, hvec)
   z = f(bmat, hmat)
@@ -518,11 +516,12 @@ if __name__ == "__main__":
     clamp = True
     binomial = False
     right = 1.0
+    left = 0.3
     for t in subtrain:
-      for left in [0.8, 0.5, 0.3]:
+      for bh in [0.1, 0.5]:
         title = f'Card {t.df.cid.iloc[0]}'
         print(
-            f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}'
+            f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}, bh={bh}'
         )
 
         res = ankiFitEasyHardMAP(
@@ -533,10 +532,13 @@ if __name__ == "__main__":
             binomial=binomial,
             left=left,
             right=right,
-        )
+            bh=bh)
         res['ax'].set_title(title)
         reses.append(res)
-        print(f'> best h={res["besth"]}, b={res["bestb"]}, loglik={res["bestloglikelihood"]}')
+        print("\n".join(res['summary']))
+        print(
+            f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
+        )
 
   if False:
     t = next(t for t in train if t.fractionCorrect > 0.9)
@@ -554,7 +556,9 @@ if __name__ == "__main__":
           clamp=clamp,
           binomial=binomial,
           left=.8,
-          right=1.0)
+          right=1.0,
+          bh=0.5,
+      )
       plt.close()
       res['summary'].insert(0, title + f'h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}')
       reses.append(res)
