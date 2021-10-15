@@ -209,12 +209,16 @@ def clampLerp2(x1, x2, y1, y2, x):
 
 def makeHalflives(b, h, ts, clamp, left, right):
   hs = [h]
+  if len(ts) == 0:
+    return hs  # just contains the halflife for a future quiz
   for t in ts[1:]:
     old = hs[-1]
     if clamp:
       hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), b, t))
     else:
       hs.append(old * b)
+  # final, halflife for future quiz
+  hs.append(hs[-1] * b)
   return hs
 
 
@@ -246,9 +250,9 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, 
         elif x == 3:
           loglik.append(-t / h)
         elif x == 2 or x == 4:
-          n = 3
+          n = 2
           logp = -t / h
-          k = 2 if x < 3 else 3
+          k = 1 if x < 3 else 2
           loglik.append(binomln(n, k) + k * logp + (n - k) * np.log(-np.expm1(logp)))
         else:
           raise Exception('unknown result')
@@ -296,7 +300,8 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, 
     bestb, besth = res.x
   bestloglikelihood = posterior(bestb, besth, True)['loglikelihood']
   summary = []
-  for x, t, h in zip(xs, ts, makeHalflives(bestb, besth, ts, clamp, left, right)):
+  halflives = makeHalflives(bestb, besth, ts, clamp, left, right)
+  for x, t, h in zip(xs, ts, halflives):
     summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}')
 
   return dict(
@@ -305,6 +310,7 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, 
       besth=besth,
       summary=summary,
       bestloglikelihood=bestloglikelihood,
+      halflives=halflives,
   )
 
 
@@ -508,7 +514,26 @@ if __name__ == "__main__":
   # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
+  if True:
+    kws = dict(
+        priors='exp',
+        clamp=True,
+        binomial=True,
+        left=0.3,
+        right=1,
+        bh=0.1,
+        bb=1.0,
+        gridsearch=False)
+    resFail = ankiFitEasyHardMAP([1, 1, 1], [1., 3., 9.], **kws)
+    resHard = ankiFitEasyHardMAP([2, 2, 2], [1., 3., 9.], **kws)
+    resMedium = ankiFitEasyHardMAP([3, 3, 3], [1., 3., 9.], **kws)
+    resEasy = ankiFitEasyHardMAP([4, 4, 4], [1., 3., 9.], **kws)
+    from pprint import pprint
+    for r in [resFail, resHard, resMedium, resEasy]:
+      pprint(r)
+    # Should be monotonically increasing:
+    finalHls = [r['halflives'][-1] for r in [resFail, resHard, resMedium, resEasy]]
+    assert np.all(np.diff(finalHls) > 0), 'final halflives should be monotonic'
 
   if True:
     fracs = [0.7, 0.8, 0.9]
@@ -522,7 +547,7 @@ if __name__ == "__main__":
     bh = 0.1
     bb = 1.0
     for t in subtrain:
-      for gridsearch in [False, True]:
+      for gridsearch in [False]:
         title = f'Card {t.df.cid.iloc[0]}'
         print(
             f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}, bh={bh}, bb={bb}, gridsearch={gridsearch}'
