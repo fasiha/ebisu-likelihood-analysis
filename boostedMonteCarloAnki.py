@@ -217,21 +217,20 @@ def makeHalflives(b, h, ts, clamp, left, right):
   return hs
 
 
-def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, left, right, bh):
+def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, left, right, bh,
+                       bb):
   from math import fsum
 
   def posterior(b, h, extra=False):
     logb = np.log(b)
     logh = np.log(h)
     if priors == 'gamma':
-      ab = 2 * 1.4 + 1
-      bb = 2.0
+      ab = bb * 1.4 + 1
       ah = bh * .25 + 1
 
       logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
       # prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
     elif priors == 'exp':
-      bb = 1.0
       logprior = -bb * b - bh * h
       # prior = np.exp(-bb * b - bh * h)
     else:
@@ -517,11 +516,13 @@ if __name__ == "__main__":
     binomial = False
     right = 1.0
     left = 0.3
+    bh = 0.1
+    bb = 1.0
     for t in subtrain:
-      for bh in [0.1, 0.5]:
+      for bb in [1.0, 0.5]:
         title = f'Card {t.df.cid.iloc[0]}'
         print(
-            f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}, bh={bh}'
+            f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}, bh={bh}, bb={bb}'
         )
 
         res = ankiFitEasyHardMAP(
@@ -532,7 +533,9 @@ if __name__ == "__main__":
             binomial=binomial,
             left=left,
             right=right,
-            bh=bh)
+            bh=bh,
+            bb=bb,
+        )
         res['ax'].set_title(title)
         reses.append(res)
         print("\n".join(res['summary']))
@@ -558,7 +561,7 @@ if __name__ == "__main__":
           left=.8,
           right=1.0,
           bh=0.5,
-      )
+          bb=1.0)
       plt.close()
       res['summary'].insert(0, title + f'h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}')
       reses.append(res)
