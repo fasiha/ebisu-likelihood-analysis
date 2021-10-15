@@ -192,25 +192,40 @@ def ankiFitEasyHardMpmath(xs: list[int], ts: list[float], priors, clamp, dps=15)
   return dict(eb=eb[0] / den[0], eh=eh[0] / den[0], quad=dict(den=den, eb=eb, eh=eh))
 
 
-def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp):
-  from math import fsum
+#
 
-  def clampLerp2(x1, x2, y1, y2, x):
-    if x <= x1:
-      return y1
-    if x >= x2:
-      return y2
-    mu = (x - x1) / (x2 - x1)
-    return (y1 * (1 - mu) + y2 * mu)
+
+def clampLerp2(x1, x2, y1, y2, x):
+  if x <= x1:
+    return y1
+  if x >= x2:
+    return y2
+  mu = (x - x1) / (x2 - x1)
+  return (y1 * (1 - mu) + y2 * mu)
+
+
+def makeHalflives(b, h, ts, clamp):
+  hs = [h]
+  for t in ts[1:]:
+    old = hs[-1]
+    if clamp:
+      hs.append(old * clampLerp2(0.8 * old, old, min(b, 1.0), b, t))
+    else:
+      hs.append(old * b)
+  return hs
+
+
+def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial):
+  from math import fsum
 
   def posterior(b, h):
     logb = np.log(b)
     logh = np.log(h)
     if priors == 'gamma':
-      ab = 10 * 1.4 + 1
-      bb = 10.0
-      ah = 10 * .25 + 1
-      bh = 10.0
+      ab = 2 * 1.4 + 1
+      bb = 2.0
+      ah = 2 * .25 + 1
+      bh = 2.0
 
       logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
       # prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
@@ -221,27 +236,33 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp):
       # prior = np.exp(-bb * b - bh * h)
     else:
       raise Exception('unknown priors')
-    hs = [h]
-    for t in ts[1:]:
-      old = hs[-1]
-      if clamp:
-        hs.append(old * clampLerp2(0.8 * old, old, min(b, 1.0), b, t))
-      else:
-        hs.append(old * b)
-    # lik = 1
-    # lik *= np.exp(sum([-t / h for x, t, h in zip(xs, ts, hs) if x > 1]))
-    # lik *= prod([1 - np.exp(-t / h) for x, t, h in zip(xs, ts, hs) if x <= 1])
-    loglik = [-t / h if x > 1 else np.log(-np.expm1(-t / h)) for x, t, h in zip(xs, ts, hs)]
+    hs = makeHalflives(b, h, ts, clamp)
 
+    if binomial:
+      loglik = []
+      for x, t, h in zip(xs, ts, hs):
+        if x == 1:
+          loglik.append(np.log(-np.expm1(-t / h)))
+        elif x == 3:
+          loglik.append(-t / h)
+        elif x == 2 or x == 4:
+          n = 50
+          logp = -t / h
+          k = np.round(n * np.exp(logp * (1.5 if x < 3 else 1 / 1.5)))
+          loglik.append(binomln(n, k) + k * logp + (n - k) * np.log(-np.expm1(logp)))
+        else:
+          raise Exception('unknown result')
+    else:
+      loglik = [-t / h if x > 1 else np.log(-np.expm1(-t / h)) for x, t, h in zip(xs, ts, hs)]
     return fsum(loglik + [logprior])
 
-  bvec = np.linspace(0.5, 5, 101)
-  hvec = np.linspace(0.5, 5, 101)
+  bvec = np.linspace(0.5, 15, 101)
+  hvec = np.linspace(0.1, 15, 101)
   f = np.vectorize(posterior)
   bmat, hmat = np.meshgrid(bvec, hvec)
   z = f(bmat, hmat)
 
-  import pylab as plt  #types:ignore
+  import pylab as plt  #type:ignore
   rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
 
   def imshow(x, y, z, ax=plt):
@@ -259,6 +280,12 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp):
   ax.set_ylabel('init halflife')
   fig.colorbar(im)
   rescalec(im, 20)
+
+  idxbest = z.argmax()
+  bestb = bmat.ravel()[idxbest]
+  besth = hmat.ravel()[idxbest]
+  for x, t, h in zip(xs, ts, makeHalflives(bestb, besth, ts, clamp)):
+    print(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}')
 
   return dict(z=z, bvec=bvec, hvec=hvec, bmat=bmat, hmat=hmat, fig=fig, ax=ax, im=im)
 
@@ -469,8 +496,16 @@ if __name__ == "__main__":
     fracs = [0.7, 0.8, 0.9]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
+    priors = 'exp'
+    clamp = True
+    binomial = False
     for t in subtrain:
-      res = ankiFitEasyHardMAP(t.results, t.dts_hours, 'gamma', True)
+      title = f'Card {t.df.cid.iloc[0]}'
+      print(f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}')
+
+      res = ankiFitEasyHardMAP(
+          t.results, t.dts_hours, priors=priors, clamp=clamp, binomial=binomial)
+      res['ax'].set_title(title)
       reses.append(res)
 
   if False:
@@ -526,111 +561,132 @@ if __name__ == "__main__":
       print("ok!")
     # ts = [t for t in train if overlap(train[0].df, t.df) > 0.8 and overlap(t.df, train[0].df) > 0.5]
 """
-# For train[2]
-NO easy/hard
-median: [2.89923 3.38762] lp median: [-87.5495  -87.56525]
+## Card 1300038031922, priors=gamma, clamp=True, binomial=False
+2@0.02  p=0.99
+2@6.92  p=0.33
+2@24.29  p=0.38
+1@19.37 🔥 p=0.46
+3@21.12  p=0.59
+3@69.23  p=0.64
+3@153.46  p=0.76
+1@265.31 🔥 p=0.62
+3@26.66  p=0.95
+1@446.41 🔥 p=0.45
+2@25.51  p=0.96
 
-BINOMIAL: hard=1, easy=2, out of 2
-median: [2.84198  3.169745] lp median: [-149.881 -149.89 ]
+## Card 1300038030806, priors=gamma, clamp=True, binomial=False
+2@0.31  p=0.82
+2@22.66  p=0.01
+1@70.26 🔥 p=0.01
+1@34.07 🔥 p=0.49
+3@13.71  p=0.75
+3@43.79  p=0.66
+3@148.01  p=0.64
+3@204.28  p=0.54
+3@357.86  p=0.71
+3@541.10  p=0.59
+4@1031.98  p=0.72
+1@2545.38 🔥 p=0.45
+4@49.09  p=0.98
+4@192.39  p=0.94
+1@693.48 🔥 p=0.80
+4@47.80  p=0.99
+4@119.26  p=0.96
+3@359.83  p=0.89
+3@747.60  p=0.79
+3@94.93  p=0.97
+1@1847.51 🔥 p=0.56
+3@27.00  p=0.99
+3@96.87  p=0.97
+4@236.92  p=0.93
+3@809.26  p=0.78
+3@713.24  p=0.80
 
-BINOMIAL only easy=2 of 2
-median: [2.89488  3.472195] lp median: [-88.52505 -88.5313 ]
+## Card 1300038030485, priors=gamma, clamp=True, binomial=False
+3@23.38  p=0.01
+3@118.24  p=0.01
+2@22.42  p=0.73
+2@76.28  p=0.81
+2@192.44  p=0.59
+2@119.20  p=0.72
+3@347.87  p=0.80
+2@338.48  p=0.80
+2@420.03  p=0.76
+2@841.76  p=0.58
+1@964.46 🔥 p=0.53
+4@15.33  p=0.99
+4@118.73  p=0.92
+3@314.67  p=0.81
+1@668.11 🔥 p=0.64
+4@26.48  p=0.98
+3@108.05  p=0.93
+4@128.55  p=0.92
+4@411.86  p=0.76
+4@1391.14  p=0.76
+3@4992.25  p=0.82
 
 
-clamping left value, uninformative prior between 0 and 1: median -> 0.8! Huh.
+## Card 1300038031922, priors=exp, clamp=True, binomial=False
+2@0.02  p=0.99
+2@6.92  p=0.43
+2@24.29  p=0.37
+1@19.37 🔥 p=0.45
+3@21.12  p=0.59
+3@69.23  p=0.56
+3@153.46  p=0.64
+1@265.31 🔥 p=0.47
+3@26.66  p=0.93
+1@446.41 🔥 p=0.65
+2@25.51  p=0.98
 
-clampleft and clampwidth:
-median: [2.81087  3.2101   0.650987 2.678775] lp median: [-152.252  -152.2855]
+## Card 1300038030806, priors=exp, clamp=True, binomial=False
+2@0.31  p=0.90
+2@22.66  p=0.13
+1@70.26 🔥 p=0.20
+1@34.07 🔥 p=0.45
+3@13.71  p=0.73
+3@43.79  p=0.77
+3@148.01  p=0.68
+3@204.28  p=0.59
+3@357.86  p=0.71
+3@541.10  p=0.60
+4@1031.98  p=0.76
+1@2545.38 🔥 p=0.51
+4@49.09  p=0.99
+4@192.39  p=0.95
+1@693.48 🔥 p=0.83
+4@47.80  p=0.99
+4@119.26  p=0.97
+3@359.83  p=0.91
+3@747.60  p=0.82
+3@94.93  p=0.97
+1@1847.51 🔥 p=0.61
+3@27.00  p=0.99
+3@96.87  p=0.97
+4@236.92  p=0.94
+3@809.26  p=0.80
+3@713.24  p=0.83
 
-clampWidth only (clampLeft=0.8)
-median: [2.804665 3.21721  2.153885] lp median: [-150.236 -150.224]
-
-# train[0]
-clampleft and clampwidth:
-median: [1.649785  1.98162   0.41851   0.8821025] lp median: [-83.5881 -83.5535]
-
-clampWidth only (clampLeft=0.8)
-median: [1.660475 2.050365 0.652474] lp median: [-81.9799  -81.96575]
-"""
-"""TOY DATA
-
-no clamp:
-
-# MPMATH
-## exp
-{'eb': mpf('2.8634392862906148'), 'eh': mpf('4.7606810766369136'), 'quad': {'den': (mpf('0.056114811374196646'), mpf('1.0e-19')), 'eb': (mpf('0.16068135543166212'), mpf('1.0e-21')), 'eh': (mpf('0.26714472062818784'), mpf('1.0e-19'))}}
-## gam
-{'eb': mpf('2.3173210884391482'), 'eh': mpf('0.94378028824502802'), 'quad': {'den': (mpf('2.3525200533613245e-12'), mpf('1.0e-17')), 'eb': (mpf('5.451544330630188e-12'), mpf('1.0e-22')), 'eh': (mpf('2.2202620540635595e-12'), mpf('1.0e-17'))}}
-# SCIPY
-## exp
-{'eb': 2.8634392862916513, 'eh': 4.760681076637943, 'quad': {'den': (0.056114811374175996, 9.980147706392323e-11), 'eb': (0.16068135543166115, 9.96352802156054e-11), 'eh': (0.26714472062814726, 9.80622793033094e-11)}}
-## gamma
-{'eb': 2.3171043781014133, 'eh': 0.9439202808031762, 'quad': {'den': (2.35086222804235e-12, 5.2123119808928056e-12), 'eb': (5.447193160910173e-12, 1.2216277034852655e-11), 'eh': (2.2190265344233156e-12, 4.589201991469663e-12)}}
-
-WITH clamp:
-
-# MPMATH
-## exp
-{'eb': mpf('2.923423191378165'), 'eh': mpf('4.2658585890674985'), 'quad': {'den': (mpf('0.038266724598723378'), mpf('1.0e-5')), 'eb': (mpf('0.11186983014998923'), mpf('1.0e-5')), 'eh': (mpf('0.16324043580494466'), mpf('1.0e-5'))}}
-## gam
-{'eb': mpf('2.3173210916402449'), 'eh': mpf('0.94378027504609563'), 'quad': {'den': (mpf('2.3525200439207764e-12'), mpf('1.0e-17')), 'eb': (mpf('5.4515443162840505e-12'), mpf('1.0e-22')), 'eh': (mpf('2.2202620141030033e-12'), mpf('1.0e-17'))}}
-# SCIPY
-/Users/fasih/Dropbox/Anki/likelihood-demo/lib/python3.9/site-packages/scipy/integrate/quadpack.py:879: IntegrationWarning: The maximum number of subdivisions (50) has been achieved.
-  If increasing the limit yields no improvement it is advised to analyze 
-  the integrand in order to determine the difficulties.  If the position of a 
-  local difficulty can be determined (singularity, discontinuity) one will 
-  probably gain from splitting up the interval and calling the integrator 
-  on the subranges.  Perhaps a special-purpose integrator should be used.
-  quad_r = quad(f, low, high, args=args, full_output=self.full_output,
-## exp
-{'eb': 2.9231658425494307, 'eh': 4.265681801997901, 'quad': {'den': (0.038225211702996725, 1.2266907273146143e-10), 'eb': (0.11173863317442079, 1.4428062950480765e-08), 'eh': (0.1630565899389903, 9.985758454321393e-10)}}
-## gamma
-{'eb': 2.317104378233146, 'eh': 0.9439202799611425, 'quad': {'den': (2.350862227404872e-12, 5.2123119808928056e-12), 'eb': (5.447193159742755e-12, 1.2216277034852655e-11), 'eh': (2.219026531842082e-12, 4.589201991469663e-12)}}
-"""
-""" SUBTRAIN, mpmath, dps=15
-# gamma, beta=10
-{'eb': mpf('4.4371327827181259'), 'eh': mpf('0.76835326467461573'), 'quad': {'den': (mpf('9.6323905210106289e-19'), mpf('9.6323905049456013e-19')), 'eb': (mpf('4.2740195756719594e-18'), mpf('4.2740195630239893e-18')), 'eh': (mpf('7.40107870343934e-19'), mpf('7.4010786936491187e-19'))}}
-{'eb': mpf('4.9033380875508898'), 'eh': mpf('0.67982918147402172'), 'quad': {'den': (mpf('1.0682441316238334e-22'), mpf('1.0682441207038355e-22')), 'eb': (mpf('5.2379621373938687e-22'), mpf('5.2379620514209078e-22')), 'eh': (mpf('7.2622353361625778e-23'), mpf('7.2622352666211345e-23'))}}
-{'eb': mpf('4.903351273843529'), 'eh': mpf('1.6269537178728586'), 'quad': {'den': (mpf('1.5916704896764054e-33'), mpf('1.5916704583850888e-33')), 'eb': (mpf('7.8045195230939558e-33'), mpf('7.8045192767379419e-33')), 'eh': (mpf('2.5895742208075411e-33'), mpf('2.58957416990099e-33'))}}
-
-# gamma, beta=2
-{'eb': mpf('3.6798252065763015'), 'eh': mpf('1.935061359161069'), 'quad': {'den': (mpf('6.2364835275217659e-6'), mpf('1.0e-7')), 'eb': (mpf('2.2949169284972484e-5'), mpf('1.0e-6')), 'eh': (mpf('1.2067978291151887e-5'), mpf('1.0e-6'))}}
-{'eb': mpf('3.6281375019261355'), 'eh': mpf('2.267483752144944'), 'quad': {'den': (mpf('1.3272549552559431e-8'), mpf('1.0e-8')), 'eb': (mpf('4.8154634777813824e-8'), mpf('1.0e-8')), 'eh': (mpf('3.0095290459967159e-8'), mpf('1.0e-8'))}}
-{'eb': mpf('4.8364182702505127'), 'eh': mpf('5.2203842564821343'), 'quad': {'den': (mpf('2.8800361355635346e-13'), mpf('1.0e-13')), 'eb': (mpf('1.3929059385021162e-12'), mpf('1.0e-12')), 'eh': (mpf('1.5034895300195523e-12'), mpf('1.0e-12'))}}
-same but with constants:
-{'eb': mpf('3.6798252031421286'), 'eh': mpf('1.9350613563697521'), 'quad': {'den': (mpf('5.9060159273508187e-5'), mpf('1.0e-6')), 'eb': (mpf('0.00021733106259624372'), mpf('1.0e-5')), 'eh': (mpf('0.00011428503191120834'), mpf('1.0e-5'))}}
-{'eb': mpf('3.6281366143368046'), 'eh': mpf('2.2674831973395406'), 'quad': {'den': (mpf('1.2569248005731195e-7'), mpf('1.0e-8')), 'eb': (mpf('4.5602948904273211e-7'), mpf('1.0e-7')), 'eh': (mpf('2.8500558656189017e-7'), mpf('1.0e-7'))}}
-{'eb': mpf('4.9247464287717575'), 'eh': mpf('5.3421612382820909'), 'quad': {'den': (mpf('2.6784386871115843e-12'), mpf('1.0e-12')), 'eb': (mpf('1.319063135903689e-11'), mpf('1.0e-11')), 'eh': (mpf('1.4308651333402678e-11'), mpf('1.0e-11'))}}
-constants don't seem to help reduce error at default dps
-same with quad instead of quadgl:
-{'eb': mpf('3.6863879855795738'), 'eh': mpf('1.9331212015853561'), 'quad': {'den': (mpf('6.0602899280021719e-5'), mpf('1.0e-6')), 'eb': (mpf('0.00022340579979716107'), mpf('1.0e-6')), 'eh': (mpf('0.00011715274947575189'), mpf('1.0e-6'))}}
-{'eb': mpf('3.6347629269971375'), 'eh': mpf('2.3236293230633454'), 'quad': {'den': (mpf('1.2958862497152868e-7'), mpf('1.0e-9')), 'eb': (mpf('4.7102392980704791e-7'), mpf('1.0e-8')), 'eh': (mpf('3.0111592891930289e-7'), mpf('1.0e-12'))}}
-{'eb': mpf('5.0798360098663444'), 'eh': mpf('5.47481627443267'), 'quad': {'den': (mpf('2.7162668149647606e-12'), mpf('1.0e-16')), 'eb': (mpf('1.3798189979062953e-11'), mpf('1.0e-11')), 'eh': (mpf('1.4871061764270465e-11'), mpf('1.0e-11'))}}
-quad with maxdegrees=8 MUCH SLOWER:
-maxdegree= 8
-{'eb': mpf('3.6818011722301374'), 'eh': mpf('1.9361193310793698'), 'quad': {'den': (mpf('5.9801860438925261e-5'), mpf('1.0e-10')), 'eb': (mpf('0.0002201785598655781'), mpf('1.0e-10')), 'eh': (mpf('0.00011578353803031381'), mpf('1.0e-9'))}}
-maxdegree= 8
-{'eb': mpf('3.6788346049551319'), 'eh': mpf('2.3253028836372853'), 'quad': {'den': (mpf('1.2756315246058749e-7'), mpf('1.0e-9')), 'eb': (mpf('4.6928373958917662e-7'), mpf('1.0e-9')), 'eh': (mpf('2.9662296626246674e-7'), mpf('1.0e-10'))}}
-maxdegree= 8
-{'eb': mpf('4.977199148961355'), 'eh': mpf('5.3926403252507749'), 'quad': {'den': (mpf('2.8154877546231069e-12'), mpf('1.0e-13')), 'eb': (mpf('1.4013243256221243e-11'), mpf('1.0e-13')), 'eh': (mpf('1.5182912800830325e-11'), mpf('1.0e-13'))}}
-
-# exp
-{'eb': mpf('3.4017221073207571'), 'eh': mpf('4.1995335093012054'), 'quad': {'den': (mpf('0.00025732638102475168'), mpf('1.0e-5')), 'eb': (mpf('0.00087535283912874233'), mpf('1.0e-5')), 'eh': (mpf('0.0010806507599406545'), mpf('1.0e-6'))}}
-{'eb': mpf('3.2443691267612786'), 'eh': mpf('5.0666280535106907'), 'quad': {'den': (mpf('1.0480515787537876e-6'), mpf('1.0e-7')), 'eb': (mpf('3.4002661853622052e-6'), mpf('1.0e-6')), 'eh': (mpf('5.3100875304401095e-6'), mpf('1.0e-10'))}}
-{'eb': mpf('5.1497050501036155'), 'eh': mpf('11.973957434125394'), 'quad': {'den': (mpf('1.4393492914181767e-8'), mpf('1.0e-8')), 'eb': (mpf('7.4122243148792456e-8'), mpf('1.0e-8')), 'eh': (mpf('1.7234707148279795e-7'), mpf('1.0e-7'))}}
-
-# gamma with dps=30, beta=10
-{'eb': mpf('2.68826746659870445439388775173029'), 'eh': mpf('0.997113671423464195401819981491926'), 'quad': {'den': (mpf('2.61854221433326359644004729975889e-15'), mpf('1.0e-16')), 'eb': (mpf('7.03934184470744429565169183660199e-15'), mpf('1.0e-16')), 'eh': (mpf('2.61098424111116815397533360916485e-15'), mpf('1.0e-21'))}}
-{'eb': mpf('2.6572217819552988780875320152'), 'eh': mpf('1.14993761558596158437532741216667'), 'quad': {'den': (mpf('1.13648074522571051421397568593537e-18'), mpf('1.0e-20')), 'eb': (mpf('3.01988139098654852045228984811882e-18'), mpf('1.0e-19')), 'eh': (mpf('1.30688195832421024348015294746962e-18'), mpf('1.0e-20'))}}
-{'eb': mpf('4.90335127384352915968144148996443'), 'eh': mpf('1.6269537178728587811268130839529'), 'quad': {'den': (mpf('1.59167048967640526473350890292076e-33'), mpf('1.59167045838508876451360035613473e-33')), 'eb': (mpf('7.80451952309395558354143951001413e-33'), mpf('7.80451927673794189640474678188905e-33')), 'eh': (mpf('2.58957422080754123623101615132951e-33'), mpf('2.58957416990099003651163933055161e-33'))}}
-
-# gamma with dps=30, beta=2
-{'eb': mpf('3.67857545505472302394153361212092'), 'eh': mpf('1.93966083242436524698270673659994'), 'quad': {'den': (mpf('0.00000626450405789605890856275966186957'), mpf('0.0000001')), 'eb': (mpf('0.0000230444508654671538478151375162568'), mpf('0.0000001')), 'eh': (mpf('0.0000121510131556644836038570839502729'), mpf('0.0000001'))}}
-{'eb': mpf('3.64184308600241914573959165114038'), 'eh': mpf('2.30796552039987044005813846327807'), 'quad': {'den': (mpf('0.0000000137309977339843860337211628701152'), mpf('0.000000001')), 'eb': (mpf('0.0000000500061391614259207935308907938409'), mpf('0.00000001')), 'eh': (mpf('0.0000000316906693307247152905236397024935'), mpf('0.000000001'))}}
-{'eb': mpf('4.91922487759379059856781318353515'), 'eh': mpf('5.31546561599123462718403796477323'), 'quad': {'den': (mpf('3.04397675962068556206235761653669e-13'), mpf('1.0e-14')), 'eb': (mpf('1.49740062027434102828135562800919e-12'), mpf('1.0e-14')), 'eh': (mpf('1.61801538016401697163488965987879e-12'), mpf('1.0e-13'))}}
-
-# gamma with dps=60, beta=10
-{'eb': mpf('2.68925408278419661229179493033106919520707879446191063530031666'), 'eh': mpf('0.996653648194098407888134925058481826121084420422586517373613489'), 'quad': {'den': (mpf('0.00000000000000262028997955962164054937227037515833196096683813603978442628267'), mpf('0.0000000000000001')), 'eb': (mpf('0.00000000000000704662552560923158441572797519750029094985439133849111636601242'), mpf('0.000000000000001')), 'eh': (mpf('0.00000000000000261152156745453645479103276396047908438540346051096218016465034'), mpf('0.00000000000000001'))}}
-{'eb': mpf('2.65735862252318426391021632622206594477068792804933463352582562'), 'eh': mpf('1.14723556314037665349867765229569515914458128340278738604196241'), 'quad': {'den': (mpf('0.00000000000000000114515423597174507793785033558364234717353164330521052666098177'), mpf('0.00000000000000000001')), 'eb': (mpf('0.00000000000000000304308548307846600725475218845741578302092690105891941272427615'), mpf('0.0000000000000000001')), 'eh': (mpf('0.00000000000000000131376166478763273596605721127403877173378730448634896049821644'), mpf('0.00000000000000000001'))}}
-{'eb': mpf('3.49252832704364503328474191992689504670746647734995171730099365'), 'eh': mpf('2.7000233833363129611259486449927745539472794910481954779625646'), 'quad': {'den': (mpf('1.2999116119807059451002034995508856349418972733278762743313675e-31'), mpf('1.0e-32')), 'eb': (mpf('4.53997812749558277629188801011384566410154618378098324550414469e-31'), mpf('1.0e-32')), 'eh': (mpf('3.50979174861830612004490012425211733204158847679739091651570922e-31'), mpf('1.0e-32'))}}
+## Card 1300038030485, priors=exp, clamp=True, binomial=False
+3@23.38  p=0.13
+3@118.24  p=0.10
+2@22.42  p=0.65
+2@76.28  p=0.72
+2@192.44  p=0.55
+2@119.20  p=0.69
+3@347.87  p=0.79
+2@338.48  p=0.79
+2@420.03  p=0.75
+2@841.76  p=0.56
+1@964.46 🔥 p=0.52
+4@15.33  p=0.99
+4@118.73  p=0.92
+3@314.67  p=0.81
+1@668.11 🔥 p=0.63
+4@26.48  p=0.98
+3@108.05  p=0.93
+4@128.55  p=0.92
+4@411.86  p=0.75
+4@1391.14  p=0.77
+3@4992.25  p=0.76
 """
