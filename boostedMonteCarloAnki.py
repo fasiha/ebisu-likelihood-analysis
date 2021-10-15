@@ -286,8 +286,9 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial):
   idxbest = z.argmax()
   bestb = bmat.ravel()[idxbest]
   besth = hmat.ravel()[idxbest]
+  summary = []
   for x, t, h in zip(xs, ts, makeHalflives(bestb, besth, ts, clamp)):
-    print(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}')
+    summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}')
 
   return dict(
       z=z,
@@ -299,7 +300,9 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial):
       ax=ax,
       im=im,
       bestb=bestb,
-      besth=besth)
+      besth=besth,
+      summary=summary,
+  )
 
 
 def ankiFitEasyHardStan(xs: list[int], ts: list[float]):
@@ -504,7 +507,7 @@ if __name__ == "__main__":
 
   rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
 
-  if True:
+  if False:
     fracs = [0.7, 0.8, 0.9]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
@@ -520,6 +523,26 @@ if __name__ == "__main__":
       res['ax'].set_title(title)
       reses.append(res)
       print(f'> best h={res["besth"]}, b={res["bestb"]}')
+
+  if True:
+    t = next(t for t in train if t.fractionCorrect > 0.9)
+    priors = 'exp'
+    clamp = True
+    binomial = False
+
+    reses = []
+    for i in range(len(t.results)):
+      title = f'{i+1}'
+      res = ankiFitEasyHardMAP(
+          t.results[:i + 1], t.dts_hours[:i + 1], priors=priors, clamp=clamp, binomial=binomial)
+      plt.close()
+      res['summary'].insert(0, title + f'h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}')
+      reses.append(res)
+    from itertools import zip_longest
+    with open('res.tsv', 'w') as fid:
+      fid.write('\n'.join(
+          ['\t'.join(z) for z in zip_longest(*[r['summary'] for r in reses], fillvalue='')]))
+      fid.write(f'\n\nCard {t.df.cid.iloc[0]}')
 
   if False:
     fracs = [0.7, 0.8, 0.9]
