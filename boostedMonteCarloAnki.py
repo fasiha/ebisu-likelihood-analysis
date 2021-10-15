@@ -206,21 +206,21 @@ def clampLerp2(x1, x2, y1, y2, x):
   return (y1 * (1 - mu) + y2 * mu)
 
 
-def makeHalflives(b, h, ts, clamp):
+def makeHalflives(b, h, ts, clamp, left, right):
   hs = [h]
   for t in ts[1:]:
     old = hs[-1]
     if clamp:
-      hs.append(old * clampLerp2(0.8 * old, old, min(b, 1.0), b, t))
+      hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), b, t))
     else:
       hs.append(old * b)
   return hs
 
 
-def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial):
+def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, left, right):
   from math import fsum
 
-  def posterior(b, h):
+  def posterior(b, h, extra=False):
     logb = np.log(b)
     logh = np.log(h)
     if priors == 'gamma':
@@ -238,7 +238,7 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial):
       # prior = np.exp(-bb * b - bh * h)
     else:
       raise Exception('unknown priors')
-    hs = makeHalflives(b, h, ts, clamp)
+    hs = makeHalflives(b, h, ts, clamp, left, right)
 
     if binomial:
       loglik = []
@@ -256,7 +256,10 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial):
           raise Exception('unknown result')
     else:
       loglik = [-t / h if x > 1 else np.log(-np.expm1(-t / h)) for x, t, h in zip(xs, ts, hs)]
-    return fsum(loglik + [logprior])
+    logposterior = fsum(loglik + [logprior])
+    if extra:
+      return dict(logposterior=logposterior, loglikelihood=fsum(loglik), logprior=logprior)
+    return logposterior
 
   bvec = np.linspace(0.5, 15, 101)
   hvec = np.linspace(0.1, 15, 101)
@@ -286,22 +289,22 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial):
   idxbest = z.argmax()
   bestb = bmat.ravel()[idxbest]
   besth = hmat.ravel()[idxbest]
+  bestloglikelihood = posterior(bestb, besth, True)['loglikelihood']
   summary = []
-  for x, t, h in zip(xs, ts, makeHalflives(bestb, besth, ts, clamp)):
+  for x, t, h in zip(xs, ts, makeHalflives(bestb, besth, ts, clamp, left, right)):
     summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}')
 
   return dict(
       z=z,
       bvec=bvec,
       hvec=hvec,
-      bmat=bmat,
-      hmat=hmat,
       fig=fig,
       ax=ax,
       im=im,
       bestb=bestb,
       besth=besth,
       summary=summary,
+      bestloglikelihood=bestloglikelihood,
   )
 
 
@@ -507,24 +510,35 @@ if __name__ == "__main__":
 
   rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
 
-  if False:
+  if True:
     fracs = [0.7, 0.8, 0.9]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
     priors = 'exp'
     clamp = True
     binomial = False
+    right = 1.0
     for t in subtrain:
-      title = f'Card {t.df.cid.iloc[0]}'
-      print(f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}')
+      for left in [0.8, 0.5, 0.3]:
+        title = f'Card {t.df.cid.iloc[0]}'
+        print(
+            f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}'
+        )
 
-      res = ankiFitEasyHardMAP(
-          t.results, t.dts_hours, priors=priors, clamp=clamp, binomial=binomial)
-      res['ax'].set_title(title)
-      reses.append(res)
-      print(f'> best h={res["besth"]}, b={res["bestb"]}')
+        res = ankiFitEasyHardMAP(
+            t.results,
+            t.dts_hours,
+            priors=priors,
+            clamp=clamp,
+            binomial=binomial,
+            left=left,
+            right=right,
+        )
+        res['ax'].set_title(title)
+        reses.append(res)
+        print(f'> best h={res["besth"]}, b={res["bestb"]}, loglik={res["bestloglikelihood"]}')
 
-  if True:
+  if False:
     t = next(t for t in train if t.fractionCorrect > 0.9)
     priors = 'exp'
     clamp = True
@@ -534,7 +548,13 @@ if __name__ == "__main__":
     for i in range(len(t.results)):
       title = f'{i+1}'
       res = ankiFitEasyHardMAP(
-          t.results[:i + 1], t.dts_hours[:i + 1], priors=priors, clamp=clamp, binomial=binomial)
+          t.results[:i + 1],
+          t.dts_hours[:i + 1],
+          priors=priors,
+          clamp=clamp,
+          binomial=binomial,
+          left=.8,
+          right=1.0)
       plt.close()
       res['summary'].insert(0, title + f'h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}')
       reses.append(res)
