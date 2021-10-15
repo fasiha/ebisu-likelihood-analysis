@@ -1,3 +1,4 @@
+import scipy.optimize as opt  #type:ignore
 from functools import cache
 import utils
 import ebisu  #type:ignore
@@ -217,8 +218,8 @@ def makeHalflives(b, h, ts, clamp, left, right):
   return hs
 
 
-def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, left, right, bh,
-                       bb):
+def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, left, right, bh, bb,
+                       gridsearch):
   from math import fsum
 
   def posterior(b, h, extra=False):
@@ -258,46 +259,48 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, 
       return dict(logposterior=logposterior, loglikelihood=fsum(loglik), logprior=logprior)
     return logposterior
 
-  bvec = np.linspace(0.5, 15, 301)
-  hvec = np.linspace(0.1, 48, 301)
-  f = np.vectorize(posterior)
-  bmat, hmat = np.meshgrid(bvec, hvec)
-  z = f(bmat, hmat)
+  if gridsearch:
+    bvec = np.linspace(0.5, 15, 301)
+    hvec = np.linspace(0.1, 48, 301)
+    f = np.vectorize(posterior)
+    bmat, hmat = np.meshgrid(bvec, hvec)
+    z = f(bmat, hmat)
 
-  import pylab as plt  #type:ignore
-  rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
+    import pylab as plt  #type:ignore
+    rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
 
-  def imshow(x, y, z, ax=plt):
+    def imshow(x, y, z, ax=plt):
 
-    def extents(f):
-      delta = f[1] - f[0]
-      return [f[0] - delta / 2, f[-1] + delta / 2]
+      def extents(f):
+        delta = f[1] - f[0]
+        return [f[0] - delta / 2, f[-1] + delta / 2]
 
-    return ax.imshow(
-        z, aspect='auto', interpolation='none', extent=extents(x) + extents(y), origin='lower')
+      return ax.imshow(
+          z, aspect='auto', interpolation='none', extent=extents(x) + extents(y), origin='lower')
 
-  fig, ax = plt.subplots()
-  im = imshow(bvec, hvec, z, ax=ax)
-  ax.set_xlabel('boost')
-  ax.set_ylabel('init halflife')
-  fig.colorbar(im)
-  rescalec(im, 20)
+    fig, ax = plt.subplots()
+    im = imshow(bvec, hvec, z, ax=ax)
+    ax.set_xlabel('boost')
+    ax.set_ylabel('init halflife')
+    fig.colorbar(im)
+    rescalec(im, 20)
 
-  idxbest = z.argmax()
-  bestb = bmat.ravel()[idxbest]
-  besth = hmat.ravel()[idxbest]
+    idxbest = z.argmax()
+    bestb = bmat.ravel()[idxbest]
+    besth = hmat.ravel()[idxbest]
+    viz = dict(z=z, bvec=bvec, hvec=hvec, fig=fig, ax=ax, im=im)
+  else:
+    viz = dict()
+    res = opt.shgo(lambda x: -posterior(*x), [(0.5, 1 / bb * 5), (0.1, 1 / bh * 5)])
+    print(res.message)
+    bestb, besth = res.x
   bestloglikelihood = posterior(bestb, besth, True)['loglikelihood']
   summary = []
   for x, t, h in zip(xs, ts, makeHalflives(bestb, besth, ts, clamp, left, right)):
     summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}')
 
   return dict(
-      z=z,
-      bvec=bvec,
-      hvec=hvec,
-      fig=fig,
-      ax=ax,
-      im=im,
+      viz=viz,
       bestb=bestb,
       besth=besth,
       summary=summary,
@@ -519,10 +522,10 @@ if __name__ == "__main__":
     bh = 0.1
     bb = 1.0
     for t in subtrain:
-      for bb in [1.0, 0.5]:
+      for gridsearch in [False, True]:
         title = f'Card {t.df.cid.iloc[0]}'
         print(
-            f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}, bh={bh}, bb={bb}'
+            f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}, bh={bh}, bb={bb}, gridsearch={gridsearch}'
         )
 
         res = ankiFitEasyHardMAP(
@@ -535,8 +538,9 @@ if __name__ == "__main__":
             right=right,
             bh=bh,
             bb=bb,
-        )
-        res['ax'].set_title(title)
+            gridsearch=gridsearch)
+        if 'ax' in res['viz']:
+          res['viz']['ax'].set_title(title)
         reses.append(res)
         print("\n".join(res['summary']))
         print(
@@ -548,6 +552,7 @@ if __name__ == "__main__":
     priors = 'exp'
     clamp = True
     binomial = False
+    gridsearch = False
 
     reses = []
     for i in range(len(t.results)):
@@ -561,7 +566,9 @@ if __name__ == "__main__":
           left=.8,
           right=1.0,
           bh=0.5,
-          bb=1.0)
+          bb=1.0,
+          gridsearch=gridsearch,
+      )
       plt.close()
       res['summary'].insert(0, title + f'h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}')
       reses.append(res)
