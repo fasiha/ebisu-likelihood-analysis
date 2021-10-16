@@ -209,16 +209,12 @@ def clampLerp2(x1, x2, y1, y2, x):
 
 def makeHalflives(b, h, ts, clamp, left, right):
   hs = [h]
-  if len(ts) == 0:
-    return hs  # just contains the halflife for a future quiz
-  for t in ts[1:]:
+  for t in ts:
     old = hs[-1]
     if clamp:
       hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), b, t))
     else:
       hs.append(old * b)
-  # final, halflife for future quiz
-  hs.append(hs[-1] * b)
   return hs
 
 
@@ -302,7 +298,7 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, 
   summary = []
   halflives = makeHalflives(bestb, besth, ts, clamp, left, right)
   for x, t, h in zip(xs, ts, halflives):
-    summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}')
+    summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}, hl={h:0.1f}')
 
   return dict(
       viz=viz,
@@ -514,7 +510,7 @@ if __name__ == "__main__":
   # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  if True:
+  if False:
     kws = dict(
         priors='exp',
         clamp=True,
@@ -536,7 +532,8 @@ if __name__ == "__main__":
     assert np.all(np.diff(finalHls) > 0), 'final halflives should be monotonic'
 
   if True:
-    fracs = [0.7, 0.8, 0.9]
+    fracs = [0.9]
+    # fracs = [0.7, 0.8, 0.9]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
     priors = 'exp'
@@ -546,8 +543,9 @@ if __name__ == "__main__":
     left = 0.3
     bh = 0.1
     bb = 1.0
+    gridsearch = False
     for t in subtrain:
-      for gridsearch in [False]:
+      for binomial in [True]:
         title = f'Card {t.df.cid.iloc[0]}'
         print(
             f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}, bh={bh}, bb={bb}, gridsearch={gridsearch}'
@@ -656,70 +654,69 @@ if __name__ == "__main__":
       print("ok!")
     # ts = [t for t in train if overlap(train[0].df, t.df) > 0.8 and overlap(t.df, train[0].df) > 0.5]
 """
-## Card 1300038031922, priors=exp, clamp=True, binomial=False <==> ## Card 1300038031922, priors=exp, clamp=True, binomial=True
-2@0.02  p=0.99 <==>  p=0.99
-2@6.92  p=0.44 <==>  p=0.36
-2@24.29  p=0.37 <==>  p=0.38
-1@19.37 🔥 p=0.45 <==> 🔥 p=0.46
-3@21.12  p=0.58 <==>  p=0.59
-3@69.23  p=0.54 <==>  p=0.63
-3@153.46  p=0.63 <==>  p=0.76
-1@265.31 🔥 p=0.45 <==> 🔥 p=0.62
-3@26.66  p=0.92 <==>  p=0.95
-1@446.41 🔥 p=0.63 <==> 🔥 p=0.45
-2@25.51  p=0.97 <==>  p=0.96
-> best h=2.8813333333333335, b=2.9166666666666665 <==> > best h=1.7886666666666666, b=3.7383333333333333
+WRONG | RIGHT
+loaded SQL data, 16623 rows | loaded SQL data, 16623 rows
+split flashcards into train/test, 190 cards in train set | split flashcards into train/test, 190 cards in train set
+Optimization terminated successfully. | Optimization terminated successfully.
+Optimization terminated successfully. | Optimization terminated successfully.
+Optimization terminated successfully. | Optimization terminated successfully.
+Optimization terminated successfully. | Optimization terminated successfully.
+{'bestb': 0.5, | {'bestb': 0.5,
+ 'besth': 0.1, |  'besth': 0.1,
+ 'bestloglikelihood': -4.54009603704951e-05, |  'bestloglikelihood': -4.54009603704951e-05,
+ 'halflives': [0.1, 0.05, 0.025, 0.0125], |  'halflives': [0.1, 0.05, 0.025, 0.0125],
+ 'summary': ['1@1.00 🔥 p=0.00', '1@3.00 🔥 p=0.00', '1@9.00 🔥 p=0.00'], |  'summary': ['1@1.00 🔥 p=0.00', '1@3.00 🔥 p=0.00', '1@9.00 🔥 p=0.00'],
+ 'viz': {}} |  'viz': {}}
+{'bestb': 1.5660903299370095, | {'bestb': 0.9999999999958493,
+ 'besth': 2.848965329566024, |  'besth': 5.1538852783967535,
+ 'bestloglikelihood': -2.4863563227344745, |  'bestloglikelihood': -3.1879036570566277,
+ 'halflives': [2.848965329566024, |  'halflives': [5.1538852783967535,
+               4.461737052959156, |                5.153885278375362,
+               6.987483253360984, |                5.15388527835397,
+               10.943029953685432], |                5.153885278332578],
+ 'summary': ['2@1.00  p=0.70', '2@3.00  p=0.51', '2@9.00  p=0.28'], |  'summary': ['2@1.00  p=0.82', '2@3.00  p=0.56', '2@9.00  p=0.17'],
+ 'viz': {}} |  'viz': {}}
+{'bestb': 0.9999999994204125, | {'bestb': 0.9999999962321562,
+ 'besth': 11.401106233369243, |  'besth': 11.401756172657308,
+ 'bestloglikelihood': -1.1402402316121207, |  'bestloglikelihood': -1.1401752398722735,
+ 'halflives': [11.401106233369243, |  'halflives': [11.401756172657308,
+               11.401106226761303, |                11.40175612969727,
+               11.401106220153364, |                11.401756086737235,
+               11.401106213545425], |                11.4017560437772],
+ 'summary': ['3@1.00  p=0.92', '3@3.00  p=0.77', '3@9.00  p=0.45'], |  'summary': ['3@1.00  p=0.92', '3@3.00  p=0.77', '3@9.00  p=0.45'],
+ 'viz': {}} |  'viz': {}}
+{'bestb': 0.9999999999797751, | {'bestb': 0.9999999999999124,
+ 'besth': 16.125125081845653, |  'besth': 16.12453932471461,
+ 'bestloglikelihood': -1.6123905934919749, |  'bestloglikelihood': -1.6124491668517082,
+ 'halflives': [16.125125081845653, |  'halflives': [16.12453932471461,
+               16.125125081519524, |                16.124539324713197,
+               16.125125081193396, |                16.124539324711783,
+               16.125125080867267], |                16.12453932471037],
+ 'summary': ['4@1.00  p=0.94', '4@3.00  p=0.83', '4@9.00  p=0.57'], |  'summary': ['4@1.00  p=0.94', '4@3.00  p=0.83', '4@9.00  p=0.57'],
+ 'viz': {}} |  'viz': {}}
 
-## Card 1300038030806, priors=exp, clamp=True, binomial=False <==> ## Card 1300038030806, priors=exp, clamp=True, binomial=True
-2@0.31  p=0.93 <==>  p=0.93
-2@22.66  p=0.20 <==>  p=0.20
-1@70.26 🔥 p=0.20 <==> 🔥 p=0.20
-1@34.07 🔥 p=0.46 <==> 🔥 p=0.46
-3@13.71  p=0.73 <==>  p=0.73
-3@43.79  p=0.72 <==>  p=0.72
-3@148.01  p=0.70 <==>  p=0.70
-3@204.28  p=0.62 <==>  p=0.62
-3@357.86  p=0.57 <==>  p=0.57
-3@541.10  p=0.59 <==>  p=0.59
-4@1031.98  p=0.72 <==>  p=0.72
-1@2545.38 🔥 p=0.45 <==> 🔥 p=0.45
-4@49.09  p=0.98 <==>  p=0.98
-4@192.39  p=0.94 <==>  p=0.94
-1@693.48 🔥 p=0.80 <==> 🔥 p=0.80
-4@47.80  p=0.99 <==>  p=0.99
-4@119.26  p=0.96 <==>  p=0.96
-3@359.83  p=0.89 <==>  p=0.89
-3@747.60  p=0.79 <==>  p=0.79
-3@94.93  p=0.97 <==>  p=0.97
-1@1847.51 🔥 p=0.56 <==> 🔥 p=0.56
-3@27.00  p=0.99 <==>  p=0.99
-3@96.87  p=0.97 <==>  p=0.97
-4@236.92  p=0.93 <==>  p=0.93
-3@809.26  p=0.78 <==>  p=0.78
-3@713.24  p=0.80 <==>  p=0.80
-> best h=4.520333333333332, b=3.11 <==> > best h=4.520333333333332, b=3.11
 
-## Card 1300038030485, priors=exp, clamp=True, binomial=False <==> ## Card 1300038030485, priors=exp, clamp=True, binomial=True
-3@23.38  p=0.12 <==>  p=0.11
-3@118.24  p=0.10 <==>  p=0.09
-2@22.42  p=0.64 <==>  p=0.63
-2@76.28  p=0.72 <==>  p=0.72
-2@192.44  p=0.58 <==>  p=0.58
-2@119.20  p=0.71 <==>  p=0.72
-3@347.87  p=0.79 <==>  p=0.79
-2@338.48  p=0.80 <==>  p=0.80
-2@420.03  p=0.76 <==>  p=0.75
-2@841.76  p=0.57 <==>  p=0.57
-1@964.46 🔥 p=0.53 <==> 🔥 p=0.52
-4@15.33  p=0.99 <==>  p=0.99
-4@118.73  p=0.92 <==>  p=0.92
-3@314.67  p=0.81 <==>  p=0.81
-1@668.11 🔥 p=0.64 <==> 🔥 p=0.64
-4@26.48  p=0.98 <==>  p=0.98
-3@108.05  p=0.93 <==>  p=0.93
-4@128.55  p=0.92 <==>  p=0.92
-4@411.86  p=0.76 <==>  p=0.76
-4@1391.14  p=0.75 <==>  p=0.77
-3@4992.25  p=0.80 <==>  p=0.78
-> best h=10.927333333333333, b=4.608333333333333 <==> > best h=10.480333333333332, b=4.705
+## Card 1300038030485, priors=exp, clamp=True, binomial=False, left=0.3, right=1.0, bh=0.1, bb=1.0, gridsearch=True | ## Card 1300038030485, priors=exp, clamp=True, binomial=False, left=0.3, right=1.0, bh=0.1, bb=1.0, gridsearch=True
+3@23.38  p=0.40 | 3@23.38  p=0.37
+3@118.24  p=0.25 | 3@118.24  p=0.26
+2@22.42  p=0.77 | 2@22.42  p=0.93
+2@76.28  p=0.74 | 2@76.28  p=0.79
+2@192.44  p=0.74 | 2@192.44  p=0.55
+2@119.20  p=0.83 | 2@119.20  p=0.84
+3@347.87  p=0.74 | 3@347.87  p=0.61
+2@338.48  p=0.75 | 2@338.48  p=0.76
+2@420.03  p=0.74 | 2@420.03  p=0.71
+2@841.76  p=0.74 | 2@841.76  p=0.55
+1@964.46 🔥 p=0.74 | 1@964.46 🔥 p=0.73
+4@15.33  p=1.00 | 4@15.33  p=1.00
+4@118.73  p=0.96 | 4@118.73  p=0.96
+3@314.67  p=0.91 | 3@314.67  p=0.91
+1@668.11 🔥 p=0.81 | 1@668.11 🔥 p=0.81
+4@26.48  p=0.99 | 4@26.48  p=0.99
+3@108.05  p=0.97 | 3@108.05  p=0.97
+4@128.55  p=0.96 | 4@128.55  p=0.96
+4@411.86  p=0.88 | 4@411.86  p=0.88
+4@1391.14  p=0.74 | 4@1391.14  p=0.65
+3@4992.25  p=0.73 | 3@4992.25  p=0.36
+> best h=25.49, b=3.35, loglik=-8.53 | > best h=23.41, b=3.74, loglik=-9.90
 """
