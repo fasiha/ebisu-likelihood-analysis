@@ -207,13 +207,21 @@ def clampLerp2(x1, x2, y1, y2, x):
   return (y1 * (1 - mu) + y2 * mu)
 
 
-def makeHalflives(b, h, xs, ts, left, right, boostOnlyOnPass):
+def makeHalflives(b, h, xs, ts, left, right, boostRule):
   hs = [h]
-  if boostOnlyOnPass:
+  if boostRule:
     for x, t in zip(xs, ts):
       old = hs[-1]
       if x > 1:
-        hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), b, t))
+        if boostRule == 'step':
+          maxb = b
+        elif boostRule == 'linear':
+          maxb = b * (x - 1)
+        elif boostRule == 'log':
+          maxb = b * np.log(x)
+        else:
+          raise Exception('unknown boostRule')
+        hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), maxb, t))
       else:
         hs.append(old)
   else:
@@ -232,7 +240,7 @@ def ankiFitEasyHardMAP(xs: list[int],
                        bh,
                        ab,
                        bb,
-                       boostOnlyOnPass,
+                       boostRule,
                        viz=False):
   from math import fsum
 
@@ -242,7 +250,7 @@ def ankiFitEasyHardMAP(xs: list[int],
     logb = np.log(b)
     logh = np.log(h)
     logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
-    hs = makeHalflives(b, h, xs, ts, left, right, boostOnlyOnPass)
+    hs = makeHalflives(b, h, xs, ts, left, right, boostRule)
 
     if binomial:
       loglik = []
@@ -306,7 +314,7 @@ def ankiFitEasyHardMAP(xs: list[int],
 
   bestloglikelihood = posterior(bestb, besth, True)['loglikelihood']
   summary = []
-  halflives = makeHalflives(bestb, besth, xs, ts, left, right, boostOnlyOnPass)
+  halflives = makeHalflives(bestb, besth, xs, ts, left, right, boostRule)
   for x, t, h in zip(xs, ts, halflives):
     summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}, hl={h:0.1f}')
 
@@ -556,7 +564,7 @@ if __name__ == "__main__":
       print('final halflives should ideally be monotonic!')
       print(finalHls)
 
-  if False:
+  if True:
     t = next(t for t in train if t.fractionCorrect > 0.95)
     binomial = True
     right = 1.0
@@ -565,27 +573,31 @@ if __name__ == "__main__":
     bh = 0.2
     bb = 1.0
     ab = MODE_BOOST * bb + 1
-    for i in range(5):
-      results = t.results if i == 0 else list(t.results[:-1]) + [2 + i]
+    boostRule = 'step'
+    for i in [0, 0.1, 0.5, 1, 5, 10]:
+      xs = t.results[:-1] if i == 0 else list(t.results[:-1]) + [1]
+      ts = t.dts_hours[:-1] if i == 0 else list(t.dts_hours[:-1]) + [t.dts_hours[-1] * i]
       res = ankiFitEasyHardMAP(
-          results,
-          t.dts_hours,
+          xs,
+          ts,
           binomial=binomial,
           left=left,
           right=right,
           ah=ah,
           bh=bh,
           ab=MODE_BOOST * bb + 1,
-          bb=bb)
+          bb=bb,
+          boostRule=boostRule,
+      )
       print(
-          f'\n## binomial={binomial}, left={left}, right={right}, ah={ah}, bh={bh}, ab={ab}, bb={bb}, final={i}'
+          f'\n## binomial={binomial}, left={left}, right={right}, ah={ah}, bh={bh}, ab={ab}, bb={bb}, final={i}, boostRule={boostRule}'
       )
       print("\n".join(res['summary']))
       print(
           f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
       )
 
-  if True:
+  if False:
     fracs = [0.7, 0.8, 0.9, 0.95]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
@@ -596,12 +608,12 @@ if __name__ == "__main__":
     bh = 0.2
     bb = 1.0
     ab = MODE_BOOST * bb + 1
-    boostOnlyOnPass = True
+    boostRule = True
     for t in subtrain:
-      for boostOnlyOnPass in [False, True]:
+      for boostRule in [False, True]:
         title = f'Card {t.df.cid.iloc[0]}'
         print(
-            f'\n## {title},  binomial={binomial}, left={left}, right={right}, ah={ah}, bh={bh}, ab={ab}, bb={bb}, boostOnlyOnPass={boostOnlyOnPass}'
+            f'\n## {title},  binomial={binomial}, left={left}, right={right}, ah={ah}, bh={bh}, ab={ab}, bb={bb}, boostRule={boostRule}'
         )
 
         res = ankiFitEasyHardMAP(
@@ -614,7 +626,7 @@ if __name__ == "__main__":
             bh=bh,
             ab=ab,
             bb=bb,
-            boostOnlyOnPass=boostOnlyOnPass,
+            boostRule=boostRule,
         )
         if 'ax' in res['viz']:
           res['viz']['ax'].set_title(title)
