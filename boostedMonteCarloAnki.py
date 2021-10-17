@@ -207,11 +207,19 @@ def clampLerp2(x1, x2, y1, y2, x):
   return (y1 * (1 - mu) + y2 * mu)
 
 
-def makeHalflives(b, h, ts, left, right):
+def makeHalflives(b, h, xs, ts, left, right, boostOnlyOnPass):
   hs = [h]
-  for t in ts:
-    old = hs[-1]
-    hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), b, t))
+  if boostOnlyOnPass:
+    for x, t in zip(xs, ts):
+      old = hs[-1]
+      if x > 1:
+        hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), b, t))
+      else:
+        hs.append(old)
+  else:
+    for x, t in zip(xs, ts):
+      old = hs[-1]
+      hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), b, t))
   return hs
 
 
@@ -224,6 +232,7 @@ def ankiFitEasyHardMAP(xs: list[int],
                        bh,
                        ab,
                        bb,
+                       boostOnlyOnPass,
                        viz=False):
   from math import fsum
 
@@ -233,7 +242,7 @@ def ankiFitEasyHardMAP(xs: list[int],
     logb = np.log(b)
     logh = np.log(h)
     logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
-    hs = makeHalflives(b, h, ts, left, right)
+    hs = makeHalflives(b, h, xs, ts, left, right, boostOnlyOnPass)
 
     if binomial:
       loglik = []
@@ -243,12 +252,14 @@ def ankiFitEasyHardMAP(xs: list[int],
           loglik.append(np.log(-np.expm1(logp)))
         elif x == 3:
           loglik.append(logp)
-        elif x == 2 or x == 4:
+        elif x == 2:  # hard
           n = 2
-          k = 1 if x < 3 else 2
+          k = 1
           loglik.append(binomln(n, k) + k * logp + (n - k) * np.log(-np.expm1(logp)))
-        else:
-          raise Exception('unknown result')
+        else:  # x>=4
+          n = 2 + (x - 4)
+          k = n
+          loglik.append(binomln(n, k) + k * logp + (n - k) * np.log(-np.expm1(logp)))
     else:
       loglik = [
           -t / h * LOG_HALF if x > 1 else np.log(-np.expm1(-t / h * LOG_HALF))
@@ -295,7 +306,7 @@ def ankiFitEasyHardMAP(xs: list[int],
 
   bestloglikelihood = posterior(bestb, besth, True)['loglikelihood']
   summary = []
-  halflives = makeHalflives(bestb, besth, ts, left, right)
+  halflives = makeHalflives(bestb, besth, xs, ts, left, right, boostOnlyOnPass)
   for x, t, h in zip(xs, ts, halflives):
     summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}, hl={h:0.1f}')
 
@@ -510,15 +521,25 @@ if __name__ == "__main__":
   # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  if True:
+  if False:
+    x = np.linspace(0, 5, 501)
+    mode = 1.5
+    plt.figure()
+    for b in [0.1, 0.5, 1.0, 2.0]:
+      plt.plot(x, gammarv.pdf(x, mode * b + 1, scale=1 / b), label=f'b={b:0.2f}')
+    plt.legend()
+
+  MODE_BOOST = 1.5  # as in, "mean median mode"
+  if False:
+    bb = 1.0
     kws = dict(
         binomial=True,
         left=0.3,
         right=1,
         ah=1.0,
         bh=0.1,
-        ab=1.0,
-        bb=1.0,
+        ab=MODE_BOOST * bb + 1,
+        bb=bb,
     )
     resFail = ankiFitEasyHardMAP([1, 1, 1], [1., 3., 9.], **kws)
     resHard = ankiFitEasyHardMAP([2, 2, 2], [1., 3., 9.], **kws)
@@ -529,24 +550,58 @@ if __name__ == "__main__":
       pprint(r)
     # Should be monotonically increasing:
     finalHls = [r['halflives'][-1] for r in [resFail, resHard, resMedium, resEasy]]
-    assert np.all(np.diff(finalHls) > 0), 'final halflives should be monotonic'
+    if not np.all(np.diff(finalHls) > 0):
+      print('final halflives should ideally be monotonic!')
+      print('final halflives should ideally be monotonic!')
+      print('final halflives should ideally be monotonic!')
+      print(finalHls)
+
+  if False:
+    t = next(t for t in train if t.fractionCorrect > 0.95)
+    binomial = True
+    right = 1.0
+    left = 0.3
+    ah = 1.0
+    bh = 0.2
+    bb = 1.0
+    ab = MODE_BOOST * bb + 1
+    for i in range(5):
+      results = t.results if i == 0 else list(t.results[:-1]) + [2 + i]
+      res = ankiFitEasyHardMAP(
+          results,
+          t.dts_hours,
+          binomial=binomial,
+          left=left,
+          right=right,
+          ah=ah,
+          bh=bh,
+          ab=MODE_BOOST * bb + 1,
+          bb=bb)
+      print(
+          f'\n## binomial={binomial}, left={left}, right={right}, ah={ah}, bh={bh}, ab={ab}, bb={bb}, final={i}'
+      )
+      print("\n".join(res['summary']))
+      print(
+          f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
+      )
 
   if True:
     fracs = [0.7, 0.8, 0.9, 0.95]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
-    binomial = False
+    binomial = True
     right = 1.0
     left = 0.3
     ah = 1.0
     bh = 0.2
-    ab = 2.0
     bb = 1.0
+    ab = MODE_BOOST * bb + 1
+    boostOnlyOnPass = True
     for t in subtrain:
-      for binomial in [True]:
+      for boostOnlyOnPass in [False, True]:
         title = f'Card {t.df.cid.iloc[0]}'
         print(
-            f'\n## {title},  binomial={binomial}, left={left}, right={right}, ah={ah}, bh={bh}, ab={ab}, bb={bb}'
+            f'\n## {title},  binomial={binomial}, left={left}, right={right}, ah={ah}, bh={bh}, ab={ab}, bb={bb}, boostOnlyOnPass={boostOnlyOnPass}'
         )
 
         res = ankiFitEasyHardMAP(
@@ -558,13 +613,15 @@ if __name__ == "__main__":
             ah=ah,
             bh=bh,
             ab=ab,
-            bb=bb)
+            bb=bb,
+            boostOnlyOnPass=boostOnlyOnPass,
+        )
         if 'ax' in res['viz']:
           res['viz']['ax'].set_title(title)
         reses.append(res)
         print("\n".join(res['summary']))
         print(
-            f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
+            f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
         )
 
   if False:
