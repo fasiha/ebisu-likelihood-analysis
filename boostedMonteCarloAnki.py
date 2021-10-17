@@ -207,36 +207,31 @@ def clampLerp2(x1, x2, y1, y2, x):
   return (y1 * (1 - mu) + y2 * mu)
 
 
-def makeHalflives(b, h, ts, clamp, left, right):
+def makeHalflives(b, h, ts, left, right):
   hs = [h]
   for t in ts:
     old = hs[-1]
-    if clamp:
-      hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), b, t))
-    else:
-      hs.append(old * b)
+    hs.append(old * clampLerp2(left * old, right * old, min(b, 1.0), b, t))
   return hs
 
 
-def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, left, right, bh, bb,
-                       gridsearch):
+def ankiFitEasyHardMAP(xs: list[int],
+                       ts: list[float],
+                       binomial,
+                       left,
+                       right,
+                       ah,
+                       bh,
+                       ab,
+                       bb,
+                       viz=False):
   from math import fsum
 
   def posterior(b, h, extra=False):
     logb = np.log(b)
     logh = np.log(h)
-    if priors == 'gamma':
-      ab = bb * 1.4 + 1
-      ah = bh * .25 + 1
-
-      logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
-      # prior = b**(ab - 1) * np.exp(-bb * b - bh * h) * h**(ah - 1)
-    elif priors == 'exp':
-      logprior = -bb * b - bh * h
-      # prior = np.exp(-bb * b - bh * h)
-    else:
-      raise Exception('unknown priors')
-    hs = makeHalflives(b, h, ts, clamp, left, right)
+    logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
+    hs = makeHalflives(b, h, ts, left, right)
 
     if binomial:
       loglik = []
@@ -259,7 +254,7 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, 
       return dict(logposterior=logposterior, loglikelihood=fsum(loglik), logprior=logprior)
     return logposterior
 
-  if gridsearch:
+  if viz:
     bvec = np.linspace(0.5, 15, 301)
     hvec = np.linspace(0.1, 48, 301)
     f = np.vectorize(posterior)
@@ -284,19 +279,18 @@ def ankiFitEasyHardMAP(xs: list[int], ts: list[float], priors, clamp, binomial, 
     ax.set_ylabel('init halflife')
     fig.colorbar(im)
     rescalec(im, 20)
-
-    idxbest = z.argmax()
-    bestb = bmat.ravel()[idxbest]
-    besth = hmat.ravel()[idxbest]
-    viz = dict(z=z, bvec=bvec, hvec=hvec, fig=fig, ax=ax, im=im)
+    viz = dict(fig=fig, ax=ax, im=im)
   else:
     viz = dict()
-    res = opt.shgo(lambda x: -posterior(*x), [(0.5, 1 / bb * 5), (0.1, 1 / bh * 5)])
-    print(res.message)
-    bestb, besth = res.x
+
+  MIN_BOOST = 1.0
+  res = opt.shgo(lambda x: -posterior(*x), [(MIN_BOOST, 1 / bb * 5), (0.1, 1 / bh * 5)])
+  print(res.message)
+  bestb, besth = res.x
+
   bestloglikelihood = posterior(bestb, besth, True)['loglikelihood']
   summary = []
-  halflives = makeHalflives(bestb, besth, ts, clamp, left, right)
+  halflives = makeHalflives(bestb, besth, ts, left, right)
   for x, t, h in zip(xs, ts, halflives):
     summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}, hl={h:0.1f}')
 
@@ -502,6 +496,7 @@ def testquad():
 if __name__ == "__main__":
   import pylab as plt  #type:ignore
   plt.ion()
+  rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
 
   df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
@@ -510,16 +505,16 @@ if __name__ == "__main__":
   # train = train[::10]  # further subdivide, for computational purposes
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  if False:
+  if True:
     kws = dict(
-        priors='exp',
-        clamp=True,
         binomial=True,
         left=0.3,
         right=1,
+        ah=1.0,
         bh=0.1,
+        ab=1.0,
         bb=1.0,
-        gridsearch=False)
+    )
     resFail = ankiFitEasyHardMAP([1, 1, 1], [1., 3., 9.], **kws)
     resHard = ankiFitEasyHardMAP([2, 2, 2], [1., 3., 9.], **kws)
     resMedium = ankiFitEasyHardMAP([3, 3, 3], [1., 3., 9.], **kws)
@@ -532,36 +527,31 @@ if __name__ == "__main__":
     assert np.all(np.diff(finalHls) > 0), 'final halflives should be monotonic'
 
   if True:
-    fracs = [0.9]
-    # fracs = [0.7, 0.8, 0.9]
+    fracs = [0.7, 0.8, 0.9, 0.95]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
-    priors = 'exp'
-    clamp = True
     binomial = False
     right = 1.0
     left = 0.3
+    ah = 1.0
     bh = 0.1
+    ab = 2.0
     bb = 1.0
-    gridsearch = False
     for t in subtrain:
       for binomial in [True]:
         title = f'Card {t.df.cid.iloc[0]}'
-        print(
-            f'\n## {title}, priors={priors}, clamp={clamp}, binomial={binomial}, left={left}, right={right}, bh={bh}, bb={bb}, gridsearch={gridsearch}'
-        )
+        print(f'\n## {title},  binomial={binomial}, left={left}, right={right}, bh={bh}, bb={bb}')
 
         res = ankiFitEasyHardMAP(
             t.results,
             t.dts_hours,
-            priors=priors,
-            clamp=clamp,
             binomial=binomial,
             left=left,
             right=right,
+            ah=ah,
             bh=bh,
-            bb=bb,
-            gridsearch=gridsearch)
+            ab=ab,
+            bb=bb)
         if 'ax' in res['viz']:
           res['viz']['ax'].set_title(title)
         reses.append(res)
@@ -572,7 +562,7 @@ if __name__ == "__main__":
 
   if False:
     t = next(t for t in train if t.fractionCorrect > 0.9)
-    priors = 'exp'
+    priors = 'gamma'
     clamp = True
     binomial = False
     gridsearch = False
