@@ -1,3 +1,4 @@
+import typing
 import scipy.optimize as opt  #type:ignore
 from functools import cache
 import utils
@@ -564,7 +565,7 @@ if __name__ == "__main__":
       print('final halflives should ideally be monotonic!')
       print(finalHls)
 
-  if True:
+  if False:
     t = next(t for t in train if t.fractionCorrect > 0.95)
     binomial = True
     right = 1.0
@@ -597,7 +598,7 @@ if __name__ == "__main__":
           f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
       )
 
-  if False:
+  if True:
     fracs = [0.7, 0.8, 0.9, 0.95]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
@@ -608,9 +609,9 @@ if __name__ == "__main__":
     bh = 0.2
     bb = 1.0
     ab = MODE_BOOST * bb + 1
-    boostRule = True
+    boostRule = 'step'
     for t in subtrain:
-      for boostRule in [False, True]:
+      for boostRule in [False, 'step', 'linear', 'log']:
         title = f'Card {t.df.cid.iloc[0]}'
         print(
             f'\n## {title},  binomial={binomial}, left={left}, right={right}, ah={ah}, bh={bh}, ab={ab}, bb={bb}, boostRule={boostRule}'
