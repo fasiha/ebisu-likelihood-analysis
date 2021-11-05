@@ -29,6 +29,10 @@ class Model:
   logStrength: float
 
 
+def _gammaToMean(alpha: float, beta: float) -> float:
+  return alpha / beta
+
+
 def _meanVarToGamma(mean, var) -> tuple[float, float]:
   a = mean**2 / var
   b = mean / var
@@ -78,12 +82,13 @@ def _simpleUpdateNoisy(model: Model,
   ret.elapseds.append(elapsed)
   ret.results.append((result, 1))
   ret.startStrengths.append(reinforcement)
+  boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
   if reinforcement > 0:
-    ret.halflife = mean
+    ret.halflife = mean * boostMean
     ret.startTime = now or _timeMs()
     ret.logStrength = np.log(reinforcement)
   else:
-    ret.halflife = mean
+    ret.halflife = mean * boostMean
 
   return ret
 
@@ -134,12 +139,13 @@ def _simpleUpdateBinomial(model: Model,
   ret.elapseds.append(elapsed)
   ret.results.append((successes, total))
   ret.startStrengths.append(reinforcement)
+  boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
   if reinforcement > 0:
-    ret.halflife = mean
+    ret.halflife = mean * boostMean
     ret.startTime = now or _timeMs()
     ret.logStrength = np.log(reinforcement)
   else:
-    ret.halflife = mean
+    ret.halflife = mean * boostMean
 
   return ret
 
