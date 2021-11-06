@@ -1,3 +1,4 @@
+from math import fsum
 import numpy as np
 from scipy.special import kv, kve, gamma, betaln, logsumexp  #type: ignore
 from dataclasses import dataclass, replace
@@ -7,15 +8,38 @@ from typing import Union
 
 
 @dataclass
+class BinomialResult:
+  successes: int
+  total: int
+
+
+@dataclass
+class NoisyBinaryResult:
+  result: float
+  q1: float
+  q0: float
+
+
+Result = Union[BinomialResult, NoisyBinaryResult]
+
+
+def success(res: Result) -> bool:
+  if isinstance(res, NoisyBinaryResult):
+    return res.result > 0.5
+  elif isinstance(res, BinomialResult):
+    return res.total == res.successes
+  else:
+    raise Exception("unknown result type")
+
+
+@dataclass
 class Model:
   elapseds: list[float]  # your choice of time units; possibly empty
 
-  # First element: ints (binomial quizzes) or floats (fuzzy noisy-Bernoulli)
-  # second element: total number of trials (1 implies binary, fuzzy or not-fuzzy)
   # same length as `elapseds`
-  results: list[tuple[Union[float, int], int]]
+  results: list[Result]
 
-  startStrengths: list[float]  # 0 < x <= 1 (reinforcement). Same length as `elpseds`
+  startStrengths: list[float]  # 0 < x <= 1 (reinforcement). Same length as `elapseds`
 
   # priors
   halflifePrior: tuple[float, float]  # alpha and beta
@@ -80,7 +104,7 @@ def _simpleUpdateNoisy(model: Model,
   ret = replace(model)  # clone
   ret.halflifePrior = (newAlpha, newBeta)
   ret.elapseds.append(elapsed)
-  ret.results.append((result, 1))
+  ret.results.append(NoisyBinaryResult(result=result, q1=q1, q0=q0))
   ret.startStrengths.append(reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
   if reinforcement > 0:
@@ -137,7 +161,7 @@ def _simpleUpdateBinomial(model: Model,
   ret = replace(model)  # clone
   ret.halflifePrior = (newAlpha, newBeta)
   ret.elapseds.append(elapsed)
-  ret.results.append((successes, total))
+  ret.results.append(BinomialResult(successes=successes, total=total))
   ret.startStrengths.append(reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
   if reinforcement > 0:
@@ -163,3 +187,102 @@ def simpleUpdate(model: Model,
   assert successes == np.floor(successes), "float `successes` implies `total==1`"
   return _simpleUpdateBinomial(
       model, elapsed, int(successes), total, now=now, reinforcement=reinforcement)
+
+
+def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
+  if x <= x1:
+    return y1
+  if x >= x2:
+    return y2
+  mu = (x - x1) / (x2 - x1)
+  return (y1 * (1 - mu) + y2 * mu)
+
+
+def fullUpdate(model: Model,
+               elapsed: float,
+               successes: Union[float, int],
+               total: int = 1,
+               now: Union[None, float] = None,
+               q0: Union[None, float] = None,
+               reinforcement: float = 1.0) -> Model:
+  ret = replace(model)
+  ret.elapseds.append(elapsed)
+  res: Result
+  if total == 1 and 0 < successes < 1:
+    q1 = max(successes, 1 - successes)
+    res = NoisyBinaryResult(result=successes, q1=q1, q0=1 - q1 if q0 is None else q0)
+  else:
+    assert successes == np.floor(successes), "float `successes` implies `total==1`"
+    res = BinomialResult(successes=int(successes), total=total)
+  ret.results.append(res)
+  ret.startStrengths.append(reinforcement)
+
+  ab, bb = ret.boostPrior
+  ah, bh = ret.halflifePrior
+  LOG_HALF = -np.log(0.5)
+
+  def makeLogPrecalls(b: float,
+                      h: float,
+                      results: list[Result],
+                      elapseds: list[float],
+                      startStrengths: list[float],
+                      left=0.3,
+                      right=1.0) -> list[float]:
+    maxb = b
+    from itertools import accumulate
+    from typing import TypedDict
+
+    class Reduced(TypedDict):
+      h: float
+      r: float
+      t0: float
+      logp: float
+
+    def reduction(prev: Reduced, curr: tuple[Result, float, float]) -> Reduced:
+      res, t, r = curr
+      logp = -(t + prev["t0"]) / prev["h"] * LOG_HALF + (np.log(prev["r"]) if prev["r"] > 0 else 0)
+
+      if success(res) and r > 0:
+        newh = prev["h"] * _clampLerp2(left * prev["h"], right * prev["h"], min(b, 1.0), maxb, t)
+      else:
+        newh = prev["h"]
+
+      t0 = 0 if r > 0 else prev["t0"] + t
+      return Reduced(h=newh, r=r, t0=t0, logp=logp)
+
+    init: Reduced = dict(h=h, r=1.0, t0=0.0, logp=1)
+    acc = accumulate(zip(results, elapseds, startStrengths), reduction, initial=init)
+    next(acc)  # skip initial
+    return [a["logp"] for a in acc]
+
+  left = 0.3
+  right = 1.0
+
+  def posterior(b: float, h: float):
+    logb = np.log(b)
+    logh = np.log(h)
+    logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
+    logps = makeLogPrecalls(
+        b, h, ret.results, ret.elapseds, ret.startStrengths, left=left, right=right)
+
+    loglik = []
+    for (res, logPrecall) in zip(ret.results, logps):
+      if isinstance(res, NoisyBinaryResult):
+        # noisy binary/Bernoulli
+        logPfail = np.log(-np.expm1(logPrecall))
+        z = success(res)
+        if z:
+          # Stan has this nice function, log_mix, which is perfect for this...
+          loglik.append(logsumexp([logPrecall + np.log(res.q1), logPfail + np.log(res.q0)]))
+        else:
+          loglik.append(logsumexp([logPrecall + np.log(1 - res.q1), logPfail + np.log(1 - res.q0)]))
+      else:
+        # binomial
+        if success(res):
+          loglik.append(logPrecall)
+        else:
+          loglik.append(np.log(-np.expm1(logPrecall)))
+    logposterior = fsum(loglik + [logprior])
+    return logposterior
+
+  return ret
