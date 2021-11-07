@@ -326,7 +326,8 @@ def ankiFitEasyHardMAP(xs: list[int],
     x = np.array(x)
     y = np.array(y)
     top = max(y)
-    bot = top - 20
+    LIMIT = 5
+    bot = top - LIMIT
     idx = y > bot
     return (x[idx], y[idx])
 
@@ -672,27 +673,6 @@ if __name__ == "__main__":
 
       # errAffine([1,2,3.0], [1,2,3.0])
 
-      def fitter1d(x, y, ax, logdomain=True):
-        pdf = gammarv.logpdf if logdomain else gammarv.pdf
-        y = y if logdomain else np.exp(y - np.max(y))
-        objective = lambda v: errConst(pdf(x, v[0], scale=1.0 / v[1]), y)
-        fin = opt.shgo(objective, [(ab / 10, ab * 10), (bb / 10, bb * 10)])
-
-        modeidx = np.argmax(y)
-        mode = x[modeidx]
-        objective1d = lambda v: errConst(pdf(x, v[0], scale=1.0 / ((v[0] - 1) / mode)), y)
-        fin1d = opt.shgo(objective1d, [(1.01, ab * 10)])
-        newalphab = fin1d.x[0]
-        newbetab = (newalphab - 1) / mode
-        print(f'new boost: ({newalphab}, {newbetab})')
-
-        ax.plot(x, pdf(x, ab, scale=1 / bb), label='prior')
-        ax.plot(x, pdf(x, fin.x[0], scale=1 / fin.x[1]), label='shgo')
-        ax.plot(x, pdf(x, newalphab, scale=1 / newbetab), label='1d')
-        ax.plot(x, y, label='post')
-        ax.legend()
-        # clean = lambda v: np.exp(v - np.max(v) - np.log(np.sum(np.exp(v - np.max(v)))))
-
       def fitter2d(x, y, fx, fy, modex, modey, logdomain=True):
         pdf = gammarv.logpdf if logdomain else gammarv.pdf
         xall = np.hstack([x, modex * np.ones_like(y)])
@@ -721,22 +701,19 @@ if __name__ == "__main__":
         betax = (alphax - 1) / modex
         betay = (alphay - 1) / modey
 
-        fig, ax = plt.subplots(2)
-        ax[0].plot(x, fx, label='post')
-        clean = lambda v: v - np.max(v) if logdomain else v / np.max(v)
-        ax[0].plot(x, clean(pdf(x, alphax, scale=1 / betax)), label='fit')
-        ax[0].legend()
-        ax[1].plot(y, fy, label='post')
-        ax[1].plot(y, clean(pdf(y, alphay, scale=1 / betay)), label='fit')
-        return dict(fig=fig, ax=ax, fin=fin, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
+        return dict(fin=fin, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
 
-      def fitterLin(x, y, fx, fy, modex, modey):
+      def fitterLin(x, y, fx, fy, modex, modey, ordinary=True):
         xall = np.hstack([x, modex * np.ones_like(y)])
         yall = np.hstack([modey * np.ones_like(x), y])
         zall = np.hstack([fx, fy])
+        if ordinary:
+          weights = np.eye(len(zall))
+        else:  # weighted least squares: weight = exp(z)
+          weights = np.diag(np.exp(zall) / 2)
 
         A = np.vstack([np.log(xall), -xall, np.log(yall), -yall, np.ones_like(xall)]).T
-        sol = lstsq(A, zall)
+        sol = lstsq(np.dot(weights, A), np.dot(weights, zall))
         t = sol[0]
         alphax = t[0] + 1
         betax = t[1]
@@ -744,16 +721,21 @@ if __name__ == "__main__":
         betay = t[3]
         return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
 
-      def fitterLin2d(x, y, fx, fy, modex, modey):
+      def fitterLin2d(x, y, fx, fy, modex, modey, ordinary=True):
         xall = np.hstack([x, modex * np.ones_like(y)])
         yall = np.hstack([modey * np.ones_like(x), y])
         zall = np.hstack([fx, fy])
+
+        if ordinary:
+          weights = np.eye(len(zall))
+        else:  # weighted least squares: weight = exp(z)
+          weights = np.diag(np.exp(zall) / 2)
 
         A = np.vstack(
             [np.log(xall) - xall / modex,
              np.log(yall) - yall / modey,
              np.ones_like(xall)]).T
-        sol = lstsq(A, zall)
+        sol = lstsq(np.dot(weights, A), np.dot(weights, zall))
         t = sol[0]
         alphax = t[0] + 1
         betax = (alphax - 1) / modex
@@ -764,32 +746,46 @@ if __name__ == "__main__":
       def plotter(x, y, fx, fy, sols, labels):
         remmax = lambda v: v / np.max(v)
         fig, ax = plt.subplots(2)
-        ax[0].plot(x, remmax(np.exp(fx)), label='post')
+        ax[0].plot(x, remmax(np.exp(fx)), label='post', linewidth=6)
+        ax[1].plot(y, remmax(np.exp(fy)), label='post', linewidth=6)
         pdf = gammarv.pdf
-        for sol, label in zip(sols, labels):
-          ax[0].plot(x, remmax(pdf(x, sol['alphax'], scale=1 / sol['betax'])), label=label)
+        widths = [4, 3, 2, 1]
+        styles = ['--', '-.', ':']
+
+        for i, (sol, label) in enumerate(zip(sols, labels)):
+          ax[0].plot(
+              x,
+              remmax(pdf(x, sol['alphax'], scale=1 / sol['betax'])),
+              label=label,
+              linewidth=widths[i % len(widths)],
+              linestyle=styles[i % len(styles)])
+          ax[1].plot(
+              y,
+              remmax(pdf(y, sol['alphay'], scale=1 / sol['betay'])),
+              label=label,
+              linewidth=widths[i % len(widths)],
+              linestyle=styles[i % len(styles)])
         ax[0].legend()
-        ax[1].plot(y, remmax(np.exp(fy)), label='post')
-        for sol, label in zip(sols, labels):
-          ax[1].plot(y, remmax(pdf(y, sol['alphay'], scale=1 / sol['betay'])), label=label)
         ax[1].legend()
 
-      reslin = fitterLin(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
-                         res['fixBoostVaryHl'], res['bestb'], res['besth'])
+      reslin = fitterLin(
+          res['varyBoost'],
+          res['varyHl'],
+          res['fixHlVaryBoost'],
+          res['fixBoostVaryHl'],
+          res['bestb'],
+          res['besth'],
+          ordinary=False)
       reslin2d = fitterLin2d(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
                              res['fixBoostVaryHl'], res['bestb'], res['besth'])
-
-      fig, ax = plt.subplots(2)
-      fitter1d(res['varyBoost'], res['fixHlVaryBoost'], ax[0])
-      ax[0].set_title('boost')
-      fitter1d(res['varyHl'], res['fixBoostVaryHl'], ax[1])
-      ax[1].set_title('halflife')
-
-      fig, ax = plt.subplots(2)
-      fitter1d(res['varyBoost'], res['fixHlVaryBoost'], ax[0], logdomain=False)
-      ax[0].set_title('boost')
-      fitter1d(res['varyHl'], res['fixBoostVaryHl'], ax[1], logdomain=False)
-      ax[1].set_title('halflife')
+      reslin2dw = fitterLin2d(
+          res['varyBoost'],
+          res['varyHl'],
+          res['fixHlVaryBoost'],
+          res['fixBoostVaryHl'],
+          res['bestb'],
+          res['besth'],
+          ordinary=False)
 
       res2d = fitter2d(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
                        res['fixBoostVaryHl'], res['bestb'], res['besth'])
@@ -801,13 +797,10 @@ if __name__ == "__main__":
           res['bestb'],
           res['besth'],
           logdomain=False)
-      for foo in [res2dlin, res2d]:
-        foo['ax'][0].set_xlabel('boost')
-        foo['ax'][1].set_xlabel('halflife')
-        foo['fig'].tight_layout()
 
       plotter(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'], res['fixBoostVaryHl'],
-              [reslin, reslin2d, res2d, res2dlin], ['lin4d', 'lin2d', 'shgolog', 'shgolin'])
+              [reslin, reslin2d, reslin2dw, res2d, res2dlin],
+              ['lstsq4d', 'lstsq2d', 'wls2d', 'shgolog', 'shgolin'])
 
       if 'ax' in res['viz']:
         res['viz']['ax'].set_title(title)
