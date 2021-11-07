@@ -1,4 +1,4 @@
-from math import log
+from scipy.linalg import lstsq  #type:ignore
 import typing
 import scipy.optimize as opt  #type:ignore
 from functools import cache
@@ -662,7 +662,6 @@ if __name__ == "__main__":
 
       def errAffine(x, y):
         "minimize `|y - a*x + b|` for a and b"
-        from scipy.linalg import lstsq  #type:ignore
         vec = lambda v: np.array(v).ravel()[:, np.newaxis]
         A = np.hstack([vec(x), vec(np.ones_like(x))])
         sol = lstsq(A, y)
@@ -730,6 +729,45 @@ if __name__ == "__main__":
         ax[1].plot(y, fy, label='post')
         ax[1].plot(y, clean(pdf(y, alphay, scale=1 / betay)), label='fit')
         return dict(fig=fig, ax=ax, fin=fin, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
+
+      def fitterLin(x, y, fx, fy, modex, modey):
+        xall = np.hstack([x, modex * np.ones_like(y)])
+        yall = np.hstack([modey * np.ones_like(x), y])
+        zall = np.hstack([fx, fy])
+
+        A = np.vstack([np.log(xall), -xall, np.log(yall), -yall, np.ones_like(xall)]).T
+        sol = lstsq(A, zall)
+        t = sol[0]
+        alphax = t[0] + 1
+        betax = t[1]
+        alphay = t[2] + 1
+        betay = t[3]
+        return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
+
+      reslin = fitterLin(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
+                         res['fixBoostVaryHl'], res['bestb'], res['besth'])
+
+      def fitterLin2d(x, y, fx, fy, modex, modey):
+        xall = np.hstack([x, modex * np.ones_like(y)])
+        yall = np.hstack([modey * np.ones_like(x), y])
+        zall = np.hstack([fx, fy])
+
+        A = np.vstack(
+            [np.log(xall) - xall / modex,
+             np.log(yall) - yall / modey,
+             np.ones_like(xall)]).T
+        sol = lstsq(A, zall)
+        t = sol[0]
+        alphax = t[0] + 1
+        betax = alphax / modex
+        alphay = t[1] + 1
+        betay = alphay / modey
+        return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
+
+      reslin = fitterLin(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
+                         res['fixBoostVaryHl'], res['bestb'], res['besth'])
+      reslin2d = fitterLin2d(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
+                             res['fixBoostVaryHl'], res['bestb'], res['besth'])
 
       fig, ax = plt.subplots(2)
       fitter1d(res['varyBoost'], res['fixHlVaryBoost'], ax[0])
