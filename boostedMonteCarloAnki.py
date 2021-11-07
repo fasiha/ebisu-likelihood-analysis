@@ -744,9 +744,6 @@ if __name__ == "__main__":
         betay = t[3]
         return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
 
-      reslin = fitterLin(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
-                         res['fixBoostVaryHl'], res['bestb'], res['besth'])
-
       def fitterLin2d(x, y, fx, fy, modex, modey):
         xall = np.hstack([x, modex * np.ones_like(y)])
         yall = np.hstack([modey * np.ones_like(x), y])
@@ -759,10 +756,23 @@ if __name__ == "__main__":
         sol = lstsq(A, zall)
         t = sol[0]
         alphax = t[0] + 1
-        betax = alphax / modex
+        betax = (alphax - 1) / modex
         alphay = t[1] + 1
-        betay = alphay / modey
+        betay = (alphay - 1) / modey
         return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
+
+      def plotter(x, y, fx, fy, sols, labels):
+        remmax = lambda v: v / np.max(v)
+        fig, ax = plt.subplots(2)
+        ax[0].plot(x, remmax(np.exp(fx)), label='post')
+        pdf = gammarv.pdf
+        for sol, label in zip(sols, labels):
+          ax[0].plot(x, remmax(pdf(x, sol['alphax'], scale=1 / sol['betax'])), label=label)
+        ax[0].legend()
+        ax[1].plot(y, remmax(np.exp(fy)), label='post')
+        for sol, label in zip(sols, labels):
+          ax[1].plot(y, remmax(pdf(y, sol['alphay'], scale=1 / sol['betay'])), label=label)
+        ax[1].legend()
 
       reslin = fitterLin(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
                          res['fixBoostVaryHl'], res['bestb'], res['besth'])
@@ -795,6 +805,9 @@ if __name__ == "__main__":
         foo['ax'][0].set_xlabel('boost')
         foo['ax'][1].set_xlabel('halflife')
         foo['fig'].tight_layout()
+
+      plotter(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'], res['fixBoostVaryHl'],
+              [reslin, reslin2d, res2d, res2dlin], ['lin4d', 'lin2d', 'shgolog', 'shgolin'])
 
       if 'ax' in res['viz']:
         res['viz']['ax'].set_title(title)
