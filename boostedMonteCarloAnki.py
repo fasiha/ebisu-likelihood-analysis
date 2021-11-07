@@ -709,8 +709,8 @@ if __name__ == "__main__":
         zall = np.hstack([fx, fy])
         if ordinary:
           weights = np.eye(len(zall))
-        else:  # weighted least squares: weight = exp(z)
-          weights = np.diag(np.exp(zall) / 2)
+        else:  # weighted least squares: see note below
+          weights = np.diag(np.exp(zall - np.max(zall)))
 
         A = np.vstack([np.log(xall), -xall, np.log(yall), -yall, np.ones_like(xall)]).T
         sol = lstsq(np.dot(weights, A), np.dot(weights, zall))
@@ -728,8 +728,9 @@ if __name__ == "__main__":
 
         if ordinary:
           weights = np.eye(len(zall))
-        else:  # weighted least squares: weight = exp(z)
-          weights = np.diag(np.exp(zall) / 2)
+        else:  # weighted least squares: weight = exp(z) (technically sqrt(exp(z)))?)
+          # move max to 0 because otherwise exp underflows
+          weights = np.diag(np.exp(zall - np.max(zall)))
 
         A = np.vstack(
             [np.log(xall) - xall / modex,
@@ -746,10 +747,10 @@ if __name__ == "__main__":
       def plotter(x, y, fx, fy, sols, labels):
         remmax = lambda v: v / np.max(v)
         fig, ax = plt.subplots(2)
-        ax[0].plot(x, remmax(np.exp(fx)), label='post', linewidth=6)
-        ax[1].plot(y, remmax(np.exp(fy)), label='post', linewidth=6)
+        ax[0].plot(x, remmax(np.exp(fx)), label='post', linewidth=4)
+        ax[1].plot(y, remmax(np.exp(fy)), label='post', linewidth=4)
         pdf = gammarv.pdf
-        widths = [4, 3, 2, 1]
+        widths = [2, 1]
         styles = ['--', '-.', ':']
 
         for i, (sol, label) in enumerate(zip(sols, labels)):
@@ -767,6 +768,7 @@ if __name__ == "__main__":
               linestyle=styles[i % len(styles)])
         ax[0].legend()
         ax[1].legend()
+        return fig, ax
 
       def cliponeside(x, fx, modex):
         xleft = modex - np.min(x[x < modex])
@@ -814,17 +816,23 @@ if __name__ == "__main__":
           res['besth'],
           logdomain=False)
 
-      plotter(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'], res['fixBoostVaryHl'],
-              [reslin, reslin2d, reslin2dw, res2d, res2dlin],
-              ['wls4d', 'lstsq2d', 'wls2d', 'shgolog', 'shgolin'])
+      fig, ax = plotter(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
+                        res['fixBoostVaryHl'], [reslin, reslin2d, reslin2dw, res2dlin],
+                        ['wls4d', 'ols2d', 'wls2d', 'shgolin'])
+      ax[0].set_xlabel('boost (unitless)')
+      ax[1].set_xlabel('init hl (hours)')
+      for a in ax:
+        a.set_ylabel('normalized prob.')
+      ax[0].set_title(f'Card {t.df.cid.iloc[0]}')
+      fig.tight_layout()
 
       if 'ax' in res['viz']:
         res['viz']['ax'].set_title(title)
       reses.append(res)
-      print("\n".join(res['summary']))
-      print(
-          f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
-      )
+      # print("\n".join(res['summary']))
+      # print(
+      #     f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
+      # )
 
   if False:
     fracs = [0.7, 0.8, 0.9, 0.95]
