@@ -326,7 +326,7 @@ def ankiFitEasyHardMAP(xs: list[int],
     x = np.array(x)
     y = np.array(y)
     top = max(y)
-    LIMIT = 5
+    LIMIT = 10
     bot = top - LIMIT
     idx = y > bot
     return (x[idx], y[idx])
@@ -768,23 +768,31 @@ if __name__ == "__main__":
         ax[0].legend()
         ax[1].legend()
 
+      def cliponeside(x, fx, modex):
+        xleft = modex - np.min(x[x < modex])
+        xright = np.max(x[x > modex]) - modex
+        xside = max(min(xleft, xright) * 2, 0.5)
+        xidx = np.abs(x - modex) < xside
+        return x[xidx], fx[xidx]
+
+      def clipleftright(x, y, fx, fy, modex, modey):
+        CLIP = True
+        if not CLIP:
+          print('NOT CLIPPING LEFT/RIGHT')
+          x, y, fx, fy, modex, modey
+        newx, newfx = cliponeside(x, fx, modex)
+        newy, newfy = cliponeside(y, fy, modey)
+        return newx, newy, newfx, newfy, modex, modey
+
       reslin = fitterLin(
-          res['varyBoost'],
-          res['varyHl'],
-          res['fixHlVaryBoost'],
-          res['fixBoostVaryHl'],
-          res['bestb'],
-          res['besth'],
+          *clipleftright(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
+                         res['fixBoostVaryHl'], res['bestb'], res['besth']),
           ordinary=False)
-      reslin2d = fitterLin2d(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
-                             res['fixBoostVaryHl'], res['bestb'], res['besth'])
+      reslin2d = fitterLin2d(*clipleftright(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
+                                            res['fixBoostVaryHl'], res['bestb'], res['besth']))
       reslin2dw = fitterLin2d(
-          res['varyBoost'],
-          res['varyHl'],
-          res['fixHlVaryBoost'],
-          res['fixBoostVaryHl'],
-          res['bestb'],
-          res['besth'],
+          *clipleftright(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
+                         res['fixBoostVaryHl'], res['bestb'], res['besth']),
           ordinary=False)
 
       res2d = fitter2d(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
@@ -800,7 +808,7 @@ if __name__ == "__main__":
 
       plotter(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'], res['fixBoostVaryHl'],
               [reslin, reslin2d, reslin2dw, res2d, res2dlin],
-              ['lstsq4d', 'lstsq2d', 'wls2d', 'shgolog', 'shgolin'])
+              ['wls4d', 'lstsq2d', 'wls2d', 'shgolog', 'shgolin'])
 
       if 'ax' in res['viz']:
         res['viz']['ax'].set_title(title)
