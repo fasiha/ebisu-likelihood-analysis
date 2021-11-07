@@ -776,7 +776,7 @@ if __name__ == "__main__":
         return x[xidx], fx[xidx]
 
       def clipleftright(x, y, fx, fy, modex, modey):
-        CLIP = True
+        CLIP = False
         if not CLIP:
           print('NOT CLIPPING LEFT/RIGHT')
           x, y, fx, fy, modex, modey
@@ -785,14 +785,22 @@ if __name__ == "__main__":
         return newx, newy, newfx, newfy, modex, modey
 
       reslin = fitterLin(
-          *clipleftright(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
-                         res['fixBoostVaryHl'], res['bestb'], res['besth']),
+          res['varyBoost'],
+          res['varyHl'],
+          res['fixHlVaryBoost'],
+          res['fixBoostVaryHl'],
+          res['bestb'],
+          res['besth'],
           ordinary=False)
-      reslin2d = fitterLin2d(*clipleftright(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
-                                            res['fixBoostVaryHl'], res['bestb'], res['besth']))
+      reslin2d = fitterLin2d(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
+                             res['fixBoostVaryHl'], res['bestb'], res['besth'])
       reslin2dw = fitterLin2d(
-          *clipleftright(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
-                         res['fixBoostVaryHl'], res['bestb'], res['besth']),
+          res['varyBoost'],
+          res['varyHl'],
+          res['fixHlVaryBoost'],
+          res['fixBoostVaryHl'],
+          res['bestb'],
+          res['besth'],
           ordinary=False)
 
       res2d = fitter2d(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
