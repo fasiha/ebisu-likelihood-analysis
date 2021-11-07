@@ -1,5 +1,7 @@
 from math import fsum
 import numpy as np
+from scipy.optimize import shgo  #type: ignore
+from scipy.stats import gamma as gammarv  # type: ignore
 from scipy.special import kv, kve, gamma, betaln, logsumexp  #type: ignore
 from dataclasses import dataclass, replace
 from time import time_ns
@@ -198,6 +200,44 @@ def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
   return (y1 * (1 - mu) + y2 * mu)
 
 
+LOG_HALF = -np.log(0.5)
+
+
+def _makeLogPrecalls(b: float,
+                     h: float,
+                     results: list[Result],
+                     elapseds: list[float],
+                     startStrengths: list[float],
+                     left=0.3,
+                     right=1.0) -> list[float]:
+  maxb = b
+  from itertools import accumulate
+  from typing import TypedDict
+
+  class Reduced(TypedDict):
+    h: float
+    r: float
+    t0: float
+    logp: float
+
+  def reduction(prev: Reduced, curr: tuple[Result, float, float]) -> Reduced:
+    res, t, r = curr
+    logp = -(t + prev["t0"]) / prev["h"] * LOG_HALF + (np.log(prev["r"]) if prev["r"] > 0 else 0)
+
+    if success(res) and r > 0:
+      newh = prev["h"] * _clampLerp2(left * prev["h"], right * prev["h"], min(b, 1.0), maxb, t)
+    else:
+      newh = prev["h"]
+
+    t0 = 0 if r > 0 else prev["t0"] + t
+    return Reduced(h=newh, r=r, t0=t0, logp=logp)
+
+  init: Reduced = dict(h=h, r=1.0, t0=0.0, logp=1)
+  acc = accumulate(zip(results, elapseds, startStrengths), reduction, initial=init)
+  next(acc)  # skip initial
+  return [a["logp"] for a in acc]
+
+
 def fullUpdate(model: Model,
                elapsed: float,
                successes: Union[float, int],
@@ -219,42 +259,6 @@ def fullUpdate(model: Model,
 
   ab, bb = ret.boostPrior
   ah, bh = ret.halflifePrior
-  LOG_HALF = -np.log(0.5)
-
-  def makeLogPrecalls(b: float,
-                      h: float,
-                      results: list[Result],
-                      elapseds: list[float],
-                      startStrengths: list[float],
-                      left=0.3,
-                      right=1.0) -> list[float]:
-    maxb = b
-    from itertools import accumulate
-    from typing import TypedDict
-
-    class Reduced(TypedDict):
-      h: float
-      r: float
-      t0: float
-      logp: float
-
-    def reduction(prev: Reduced, curr: tuple[Result, float, float]) -> Reduced:
-      res, t, r = curr
-      logp = -(t + prev["t0"]) / prev["h"] * LOG_HALF + (np.log(prev["r"]) if prev["r"] > 0 else 0)
-
-      if success(res) and r > 0:
-        newh = prev["h"] * _clampLerp2(left * prev["h"], right * prev["h"], min(b, 1.0), maxb, t)
-      else:
-        newh = prev["h"]
-
-      t0 = 0 if r > 0 else prev["t0"] + t
-      return Reduced(h=newh, r=r, t0=t0, logp=logp)
-
-    init: Reduced = dict(h=h, r=1.0, t0=0.0, logp=1)
-    acc = accumulate(zip(results, elapseds, startStrengths), reduction, initial=init)
-    next(acc)  # skip initial
-    return [a["logp"] for a in acc]
-
   left = 0.3
   right = 1.0
 
@@ -262,7 +266,7 @@ def fullUpdate(model: Model,
     logb = np.log(b)
     logh = np.log(h)
     logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
-    logps = makeLogPrecalls(
+    logps = _makeLogPrecalls(
         b, h, ret.results, ret.elapseds, ret.startStrengths, left=left, right=right)
 
     loglik = []
@@ -284,5 +288,11 @@ def fullUpdate(model: Model,
           loglik.append(np.log(-np.expm1(logPrecall)))
     logposterior = fsum(loglik + [logprior])
     return logposterior
+
+  MIN_BOOST = 1.0
+  maxBoost = gammarv.ppf(0.99, ab, scale=1.0 / bb)
+  minHalflife, maxHalflife = gammarv.ppf([0.01, 0.99], ah, scale=1.0 / bh)
+  opt = shgo(lambda x: -posterior(*x), [(MIN_BOOST, maxBoost), (minHalflife, maxHalflife)])
+  bestb, besth = opt.x
 
   return ret

@@ -304,14 +304,36 @@ def ankiFitEasyHardMAP(xs: list[int],
     ax.set_ylabel('init halflife')
     fig.colorbar(im)
     rescalec(im, 20)
-    viz = dict(fig=fig, ax=ax, im=im)
+    vizdict = dict(fig=fig, ax=ax, im=im)
   else:
-    viz = dict()
+    vizdict = dict()
 
   MIN_BOOST = 1.0
   res = opt.shgo(lambda x: -posterior(*x), [(MIN_BOOST, 1 / bb * 5), (0.1, 1 / bh * 5)])
   print(res.message)
   bestb, besth = res.x
+
+  if viz:
+    mark = ax.plot([bestb], [besth], marker='o')
+
+  if not viz:
+    # same as above
+    bvec = np.linspace(0.5, 15, 301)
+    hvec = np.linspace(0.1, 48, 301)
+
+  def clean(x, y):
+    x = np.array(x)
+    y = np.array(y)
+    top = max(y)
+    bot = top - 20
+    idx = y > bot
+    return (x[idx], y[idx])
+
+  fixBoostVaryHl = [posterior(bestb, h) for h in hvec]
+  varyHl, fixBoostVaryHl = clean(hvec, fixBoostVaryHl)
+
+  fixHlVaryBoost = [posterior(b, besth) for b in bvec]
+  varyBoost, fixHlVaryBoost = clean(bvec, fixHlVaryBoost)
 
   bestloglikelihood = posterior(bestb, besth, True)['loglikelihood']
   summary = []
@@ -320,12 +342,16 @@ def ankiFitEasyHardMAP(xs: list[int],
     summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}, hl={h:0.1f}')
 
   return dict(
-      viz=viz,
+      viz=vizdict,
       bestb=bestb,
       besth=besth,
       summary=summary,
       bestloglikelihood=bestloglikelihood,
       halflives=halflives,
+      fixBoostVaryHl=fixBoostVaryHl,
+      fixHlVaryBoost=fixHlVaryBoost,
+      varyHl=varyHl,
+      varyBoost=varyBoost,
   )
 
 
@@ -599,6 +625,94 @@ if __name__ == "__main__":
       )
 
   if True:
+    fracs = [0.9]
+    subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
+    reses = []
+    binomial = True
+    right = 1.0
+    left = 0.3
+    ah = 1.0
+    bh = 0.2
+    bb = 1.0
+    ab = MODE_BOOST * bb + 1
+    boostRule = 'step'
+    for t in subtrain:
+      title = f'Card {t.df.cid.iloc[0]}'
+      print(
+          f'\n## {title},  binomial={binomial}, left={left}, right={right}, ah={ah}, bh={bh}, ab={ab}, bb={bb}, boostRule={boostRule}'
+      )
+
+      res = ankiFitEasyHardMAP(
+          t.results,
+          t.dts_hours,
+          binomial=binomial,
+          left=left,
+          right=right,
+          ah=ah,
+          bh=bh,
+          ab=ab,
+          bb=bb,
+          boostRule=boostRule,
+          viz=False,
+      )
+
+      def errConst(x, y):
+        return np.sum(((x - np.mean(x)) - (y - np.mean(y)))**2)
+
+      def errAffine(x, y):
+        "minimize `|y - a*x + b|` for a and b"
+        from scipy.linalg import lstsq  #type:ignore
+        vec = lambda v: np.array(v).ravel()[:, np.newaxis]
+        A = np.hstack([vec(x), vec(np.ones_like(x))])
+        sol = lstsq(A, y)
+        return sol[1]  # error
+        # equivalent to
+        # err = np.dot(A, sol[0]) - y
+        # return np.dot(err, err)
+
+      # errAffine([1,2,3.0], [1,2,3.0])
+
+      def fitter1d(x, y, ax, logdomain=True):
+        pdf = gammarv.logpdf if logdomain else gammarv.pdf
+        y = y if logdomain else np.exp(y - np.max(y))
+        objective = lambda v: errConst(pdf(x, v[0], scale=1.0 / v[1]), y)
+        fin = opt.shgo(objective, [(ab / 10, ab * 10), (bb / 10, bb * 10)])
+
+        modeidx = np.argmax(y)
+        mode = x[modeidx]
+        objective1d = lambda v: errConst(pdf(x, v[0], scale=1.0 / ((v[0] - 1) / mode)), y)
+        fin1d = opt.shgo(objective1d, [(1.01, ab * 10)])
+        newalphab = fin1d.x[0]
+        newbetab = (newalphab - 1) / mode
+        print(f'new boost: ({newalphab}, {newbetab})')
+
+        ax.plot(x, pdf(x, ab, scale=1 / bb), label='prior')
+        ax.plot(x, pdf(x, fin.x[0], scale=1 / fin.x[1]), label='shgo')
+        ax.plot(x, pdf(x, newalphab, scale=1 / newbetab), label='1d')
+        ax.plot(x, y, label='post')
+        ax.legend()
+
+      fig, ax = plt.subplots(2)
+      fitter1d(res['varyBoost'], res['fixHlVaryBoost'], ax[0])
+      ax[0].set_title('boost')
+      fitter1d(res['varyHl'], res['fixBoostVaryHl'], ax[1])
+      ax[1].set_title('halflife')
+
+      fig, ax = plt.subplots(2)
+      fitter1d(res['varyBoost'], res['fixHlVaryBoost'], ax[0], logdomain=False)
+      ax[0].set_title('boost')
+      fitter1d(res['varyHl'], res['fixBoostVaryHl'], ax[1], logdomain=False)
+      ax[1].set_title('halflife')
+
+      if 'ax' in res['viz']:
+        res['viz']['ax'].set_title(title)
+      reses.append(res)
+      print("\n".join(res['summary']))
+      print(
+          f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
+      )
+
+  if False:
     fracs = [0.7, 0.8, 0.9, 0.95]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
     reses = []
