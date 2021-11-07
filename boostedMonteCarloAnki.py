@@ -1,3 +1,4 @@
+from math import log
 import typing
 import scipy.optimize as opt  #type:ignore
 from functools import cache
@@ -691,6 +692,44 @@ if __name__ == "__main__":
         ax.plot(x, pdf(x, newalphab, scale=1 / newbetab), label='1d')
         ax.plot(x, y, label='post')
         ax.legend()
+        # clean = lambda v: np.exp(v - np.max(v) - np.log(np.sum(np.exp(v - np.max(v)))))
+
+      def fitter2d(x, y, fx, fy, modex, modey, logdomain=True):
+        pdf = gammarv.logpdf if logdomain else gammarv.pdf
+        xall = np.hstack([x, modex * np.ones_like(y)])
+        yall = np.hstack([modey * np.ones_like(x), y])
+        zall = np.hstack([fx, fy])
+        if not logdomain:
+          clean = lambda z: np.exp(z - np.max(z))
+          zall = clean(zall)
+          fx = clean(fx)  # just for plot
+          fy = clean(fy)  # just for plot
+        errfix = errConst if logdomain else errAffine
+
+        def objective(v):
+          alphax, alphay = v
+          betax = (alphax - 1) / modex
+          betay = (alphay - 1) / modey
+          if logdomain:
+            zfit = (pdf(xall, alphax, scale=1 / betax) + pdf(yall, alphay, scale=1 / betay))
+          else:
+            zfit = (pdf(xall, alphax, scale=1 / betax) * pdf(yall, alphay, scale=1 / betay))
+          return errfix(zfit, zall)
+
+        fin = opt.shgo(objective, [(1.01, 20.), (1.01, 20)])
+        print(fin)
+        alphax, alphay = fin.x
+        betax = (alphax - 1) / modex
+        betay = (alphay - 1) / modey
+
+        fig, ax = plt.subplots(2)
+        ax[0].plot(x, fx, label='post')
+        clean = lambda v: v - np.max(v) if logdomain else v / np.max(v)
+        ax[0].plot(x, clean(pdf(x, alphax, scale=1 / betax)), label='fit')
+        ax[0].legend()
+        ax[1].plot(y, fy, label='post')
+        ax[1].plot(y, clean(pdf(y, alphay, scale=1 / betay)), label='fit')
+        return dict(fig=fig, ax=ax, fin=fin, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
 
       fig, ax = plt.subplots(2)
       fitter1d(res['varyBoost'], res['fixHlVaryBoost'], ax[0])
@@ -703,6 +742,21 @@ if __name__ == "__main__":
       ax[0].set_title('boost')
       fitter1d(res['varyHl'], res['fixBoostVaryHl'], ax[1], logdomain=False)
       ax[1].set_title('halflife')
+
+      res2d = fitter2d(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
+                       res['fixBoostVaryHl'], res['bestb'], res['besth'])
+      res2dlin = fitter2d(
+          res['varyBoost'],
+          res['varyHl'],
+          res['fixHlVaryBoost'],
+          res['fixBoostVaryHl'],
+          res['bestb'],
+          res['besth'],
+          logdomain=False)
+      for foo in [res2dlin, res2d]:
+        foo['ax'][0].set_xlabel('boost')
+        foo['ax'][1].set_xlabel('halflife')
+        foo['fig'].tight_layout()
 
       if 'ax' in res['viz']:
         res['viz']['ax'].set_title(title)
