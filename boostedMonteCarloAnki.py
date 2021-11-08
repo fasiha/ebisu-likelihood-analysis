@@ -376,7 +376,7 @@ def ankiFitEasyHardMAP(xs: list[int],
   boostSamples = []
   hlSamples = []
   posteriorSamples = []
-  LIMIT = 5
+  LIMIT = 3
   for b, post in samplePeak(lambda b: posterior(b, besth), bestb, MIN_BOOST, np.inf, LIMIT, 15):
     boostSamples.append(b)
     posteriorSamples.append(post)
@@ -679,8 +679,12 @@ if __name__ == "__main__":
       )
 
   if True:
-    fracs = [0.9]
+    fracs = [0.8, 0.85, 0.9, 0.95]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
+
+    lens = [6, 7, 8, 9]
+    subtrain.extend([next(t for t in train if t.len == l) for l in lens])
+
     reses = []
     binomial = True
     right = 1.0
@@ -748,7 +752,6 @@ if __name__ == "__main__":
           return errfix(zfit, zall)
 
         fin = opt.shgo(objective, [(1.01, 20.), (1.01, 20)])
-        print(fin)
         alphax, alphay = fin.x
         betax = (alphax - 1) / modex
         betay = (alphay - 1) / modey
@@ -887,16 +890,18 @@ if __name__ == "__main__":
       ax[1].set_xlabel('init hl (hours)')
       for a in ax:
         a.set_ylabel('normalized prob.')
-      ax[0].set_title(f'Card {t.df.cid.iloc[0]}')
+      ax[0].set_title(
+          f'Card {t.df.cid.iloc[0]}, {int(np.round(t.fractionCorrect * t.len))}/{t.len} pass')
       fig.tight_layout()
 
       if 'ax' in res['viz']:
         res['viz']['ax'].set_title(title)
       reses.append(res)
-      # print("\n".join(res['summary']))
-      # print(
-      #     f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
-      # )
+      if True:
+        print("\n".join(res['summary']))
+        print(
+            f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
+        )
 
   if False:
     fracs = [0.7, 0.8, 0.9, 0.95]
