@@ -346,7 +346,7 @@ def ankiFitEasyHardMAP(xs: list[int],
     vizdict = dict()
 
   MIN_BOOST = 1.0
-  res = opt.shgo(lambda x: -posterior(*x), [(MIN_BOOST, 5), (2, 50)])
+  res = opt.shgo(lambda x: -posterior(*x), [(MIN_BOOST, 5), (6, 50)])
   print(res.message)
   bestb, besth = res.x
 
@@ -406,6 +406,7 @@ def ankiFitEasyHardMAP(xs: list[int],
       fixHlVaryBoost=fixHlVaryBoost,
       varyHl=varyHl,
       varyBoost=varyBoost,
+      shgo=res,
   )
 
 
@@ -679,11 +680,11 @@ if __name__ == "__main__":
       )
 
   if True:
-    fracs = [0.8, 0.85, 0.9, 0.95]
+    fracs = [0.9, 0.95]
     subtrain = [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]
 
-    lens = [6, 7, 8, 9]
-    subtrain.extend([next(t for t in train if t.len == l) for l in lens])
+    # lens = [6, 7, 8, 9]
+    # subtrain.extend([next(t for t in train if t.len == l) for l in lens])
 
     reses = []
     binomial = True
@@ -691,7 +692,7 @@ if __name__ == "__main__":
     left = 0.3
     ah = 1.0
     bh = 0.2
-    bb = 1.0
+    bb = 3.0
     ab = MODE_BOOST * bb + 1
     boostRule = 'step'
     for t in subtrain:
@@ -942,12 +943,15 @@ if __name__ == "__main__":
             f'> best h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}, final hl={res["halflives"][-1]:0.2f}, loglik={res["bestloglikelihood"]:0.2f}'
         )
 
-  if False:
+  if True:
     t = next(t for t in train if t.fractionCorrect > 0.9)
     priors = 'gamma'
     clamp = True
     binomial = False
     gridsearch = False
+    ah = 1.0
+    ab = MODE_BOOST * bb + 1
+    boostRule = 'step'
 
     reses = []
     for i in range(len(t.results)):
@@ -955,16 +959,16 @@ if __name__ == "__main__":
       res = ankiFitEasyHardMAP(
           t.results[:i + 1],
           t.dts_hours[:i + 1],
-          priors=priors,
-          clamp=clamp,
           binomial=binomial,
-          left=.8,
+          left=.3,
           right=1.0,
-          bh=0.5,
-          bb=1.0,
-          gridsearch=gridsearch,
+          ah=ah,
+          bh=bh,
+          ab=ab,
+          bb=bb,
+          boostRule=boostRule,
+          viz=False,
       )
-      plt.close()
       res['summary'].insert(0, title + f'h={res["besth"]:0.2f}, b={res["bestb"]:0.2f}')
       reses.append(res)
     from itertools import zip_longest
@@ -1025,52 +1029,3 @@ if __name__ == "__main__":
     if thatcard:
       print("ok!")
     # ts = [t for t in train if overlap(train[0].df, t.df) > 0.8 and overlap(t.df, train[0].df) > 0.5]
-"""
-# Base 2
-## Card 1300038031922,  binomial=True, left=0.3, right=1.0, bh=0.1, bb=1.0, ah=0.1
-Optimization terminated successfully.
-2@0.02  p=1.00, hl=25.1
-2@6.92  p=0.76, hl=25.1
-2@24.29  p=0.38, hl=25.1
-1@19.37 🔥 p=0.56, hl=33.4
-3@21.12  p=0.57, hl=38.1
-3@69.23  p=0.20, hl=42.9
-3@153.46  p=0.07, hl=57.9
-1@265.31 🔥 p=0.03, hl=78.0
-3@26.66  p=0.78, hl=105.2
-1@446.41 🔥 p=0.01, hl=105.2
-2@25.51  p=0.84, hl=141.9
-> best h=25.05, b=1.35, loglik=-14.98
-
-## Card 1300038031922,  binomial=True, left=0.3, right=1.0, bh=0.2, bb=1.0, ah=0.2
-Optimization terminated successfully.
-2@0.02  p=1.00, hl=5.6
-2@6.92  p=0.29, hl=5.6
-2@24.29  p=0.08, hl=9.5
-1@19.37 🔥 p=0.30, hl=15.9
-3@21.12  p=0.46, hl=26.8
-3@69.23  p=0.17, hl=39.6
-3@153.46  p=0.10, hl=66.7
-1@265.31 🔥 p=0.09, hl=112.4
-3@26.66  p=0.87, hl=189.3
-1@446.41 🔥 p=0.09, hl=189.3
-2@25.51  p=0.92, hl=318.8
-> best h=5.62, b=1.68, loglik=-13.91
-
-# Base e
-## Card 1300038031922,  binomial=True, left=0.3, right=1.0, bh=0.1, bb=1.0, ah=0.1
-Optimization terminated successfully.
-2@0.02  p=1.00, hl=6.9
-2@6.92  p=0.37, hl=6.9
-2@24.29  p=0.14, hl=12.2
-1@19.37 🔥 p=0.41, hl=21.5
-3@21.12  p=0.55, hl=35.5
-3@69.23  p=0.23, hl=46.9
-3@153.46  p=0.16, hl=82.7
-1@265.31 🔥 p=0.16, hl=145.6
-3@26.66  p=0.90, hl=256.5
-1@446.41 🔥 p=0.18, hl=256.5
-2@25.51  p=0.95, hl=451.8
-> best h=6.92, b=1.76, loglik=-14.44
-
-"""
