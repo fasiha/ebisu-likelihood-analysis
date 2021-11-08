@@ -346,7 +346,7 @@ def ankiFitEasyHardMAP(xs: list[int],
     vizdict = dict()
 
   MIN_BOOST = 1.0
-  res = opt.shgo(lambda x: -posterior(*x), [(MIN_BOOST, 1 / bb * 5), (0.1, 1 / bh * 5)])
+  res = opt.shgo(lambda x: -posterior(*x), [(MIN_BOOST, 5), (2, 50)])
   print(res.message)
   bestb, besth = res.x
 
