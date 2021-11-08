@@ -233,6 +233,42 @@ def makeHalflives(b, h, xs, ts, left, right, boostRule):
   return hs
 
 
+def samplePeak(f: typing.Callable[[float], float],
+               x0: float,
+               xmin: float,
+               xmax: float,
+               ydown: float,
+               nsamples: int,
+               doubleIters: int = 5):
+  ydown = abs(ydown)
+  y0 = f(x0)
+  samples = [(x0, y0)]
+  x = x0
+  for i in range(doubleIters):
+    x = (x + xmin) / 2
+    y = f(x)
+    samples.append((x, y))
+    if y < (y0 - ydown):
+      break
+  xleft = x
+  x = x0
+  for i in range(doubleIters):
+    if xmax < np.inf:
+      x = (xmax + x) / 2
+    else:
+      x *= 2
+    y = f(x)
+    samples.append((x, y))
+    if y < (y0 - ydown):
+      break
+  xright = x
+  xv = np.linspace(xleft, xright, nsamples + 2)  # 2 extra because we'll discard xleft and xright
+  for x in xv[1:-1]:  # skip first and last , which we already have in `xs`
+    y = f(x)
+    samples.append((x, y))
+  return samples
+
+
 def ankiFitEasyHardMAP(xs: list[int],
                        ts: list[float],
                        binomial,
@@ -337,6 +373,19 @@ def ankiFitEasyHardMAP(xs: list[int],
   fixHlVaryBoost = [posterior(b, besth) for b in bvec]
   varyBoost, fixHlVaryBoost = clean(bvec, fixHlVaryBoost)
 
+  boostSamples = []
+  hlSamples = []
+  posteriorSamples = []
+  LIMIT = 5
+  for b, post in samplePeak(lambda b: posterior(b, besth), bestb, MIN_BOOST, np.inf, LIMIT, 15):
+    boostSamples.append(b)
+    posteriorSamples.append(post)
+    hlSamples.append(besth)
+  for h, post in samplePeak(lambda h: posterior(bestb, h), besth, 0, np.inf, LIMIT, 15):
+    hlSamples.append(h)
+    posteriorSamples.append(post)
+    boostSamples.append(bestb)
+
   bestloglikelihood = posterior(bestb, besth, True)['loglikelihood']
   summary = []
   halflives = makeHalflives(bestb, besth, xs, ts, left, right, boostRule)
@@ -344,6 +393,9 @@ def ankiFitEasyHardMAP(xs: list[int],
     summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}, hl={h:0.1f}')
 
   return dict(
+      boostSamples=np.array(boostSamples),
+      hlSamples=np.array(hlSamples),
+      posteriorSamples=np.array(posteriorSamples),
       viz=vizdict,
       bestb=bestb,
       besth=besth,
@@ -703,6 +755,17 @@ if __name__ == "__main__":
 
         return dict(fin=fin, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
 
+      def fitsamples(xall, yall, zall):  # wls 4d
+        weights = np.diag(np.exp(zall - np.max(zall)))**3
+        A = np.vstack([np.log(xall), -xall, np.log(yall), -yall, np.ones_like(xall)]).T
+        sol = lstsq(np.dot(weights, A), np.dot(weights, zall))
+        t = sol[0]
+        alphax = t[0] + 1
+        betax = t[1]
+        alphay = t[2] + 1
+        betay = t[3]
+        return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
+
       def fitterLin(x, y, fx, fy, modex, modey, ordinary=True):
         xall = np.hstack([x, modex * np.ones_like(y)])
         yall = np.hstack([modey * np.ones_like(x), y])
@@ -786,6 +849,7 @@ if __name__ == "__main__":
         newy, newfy = cliponeside(y, fy, modey)
         return newx, newy, newfx, newfy, modex, modey
 
+      ressamples = fitsamples(res['boostSamples'], res['hlSamples'], res['posteriorSamples'])
       reslin = fitterLin(
           res['varyBoost'],
           res['varyHl'],
@@ -817,8 +881,8 @@ if __name__ == "__main__":
           logdomain=False)
 
       fig, ax = plotter(res['varyBoost'], res['varyHl'], res['fixHlVaryBoost'],
-                        res['fixBoostVaryHl'], [reslin, reslin2d, reslin2dw, res2dlin],
-                        ['wls4d', 'ols2d', 'wls2d', 'shgolin'])
+                        res['fixBoostVaryHl'], [reslin, reslin2d, reslin2dw, res2dlin, ressamples],
+                        ['wls4d', 'ols2d', 'wls2d', 'shgolin', 'peaksample'])
       ax[0].set_xlabel('boost (unitless)')
       ax[1].set_xlabel('init hl (hours)')
       for a in ax:
