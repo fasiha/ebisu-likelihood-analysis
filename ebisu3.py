@@ -1,5 +1,6 @@
+from scipy.linalg import lstsq  #type:ignore
 from math import fsum
-import numpy as np
+import numpy as np  # type:ignore
 from scipy.optimize import shgo  #type: ignore
 from scipy.stats import gamma as gammarv  # type: ignore
 from scipy.special import kv, kve, gamma, betaln, logsumexp  #type: ignore
@@ -161,11 +162,14 @@ def _simpleUpdateBinomial(model: Model,
   mean = np.exp(logmean)
 
   ret = replace(model)  # clone
+  # update prior(s)
   ret.halflifePrior = (newAlpha, newBeta)
+  # ensure we add THIS quiz
   ret.elapseds.append(elapsed)
   ret.results.append(BinomialResult(successes=successes, total=total))
   ret.startStrengths.append(reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
+  # update SQL-friendly scalars
   if reinforcement > 0:
     ret.halflife = mean * boostMean
     ret.startTime = now or _timeMs()
@@ -203,19 +207,19 @@ def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
 LOG_HALF = -np.log(0.5)
 
 
-def _makeLogPrecalls(b: float,
-                     h: float,
-                     results: list[Result],
-                     elapseds: list[float],
-                     startStrengths: list[float],
-                     left=0.3,
-                     right=1.0) -> list[float]:
+def _makeLogPrecalls_Halflives(b: float,
+                               h: float,
+                               results: list[Result],
+                               elapseds: list[float],
+                               startStrengths: list[float],
+                               left=0.3,
+                               right=1.0) -> list[tuple[float, float]]:
   maxb = b
   from itertools import accumulate
   from typing import TypedDict
 
   class Reduced(TypedDict):
-    h: float
+    h: float  # halflife for NEXT quiz
     r: float
     t0: float
     logp: float
@@ -235,17 +239,73 @@ def _makeLogPrecalls(b: float,
   init: Reduced = dict(h=h, r=1.0, t0=0.0, logp=1)
   acc = accumulate(zip(results, elapseds, startStrengths), reduction, initial=init)
   next(acc)  # skip initial
-  return [a["logp"] for a in acc]
+  return [(a["logp"], a["h"]) for a in acc]
 
 
-def fullUpdate(model: Model,
-               elapsed: float,
-               successes: Union[float, int],
-               total: int = 1,
-               now: Union[None, float] = None,
-               q0: Union[None, float] = None,
-               reinforcement: float = 1.0) -> Model:
+def _posterior(b: float, h: float, ret: Model, left: float, right: float):
+  ab, bb = ret.boostPrior
+  ah, bh = ret.halflifePrior
+
+  logb = np.log(b)
+  logh = np.log(h)
+  logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
+  logpHls = _makeLogPrecalls_Halflives(
+      b, h, ret.results, ret.elapseds, ret.startStrengths, left=left, right=right)
+
+  loglik = []
+  for (res, (logPrecall, _halflife)) in zip(ret.results, logpHls):
+    if isinstance(res, NoisyBinaryResult):
+      # noisy binary/Bernoulli
+      logPfail = np.log(-np.expm1(logPrecall))
+      z = success(res)
+      if z:
+        # Stan has this nice function, log_mix, which is perfect for this...
+        loglik.append(logsumexp([logPrecall + np.log(res.q1), logPfail + np.log(res.q0)]))
+      else:
+        loglik.append(logsumexp([logPrecall + np.log(1 - res.q1), logPfail + np.log(1 - res.q0)]))
+    else:
+      # binomial
+      if success(res):
+        loglik.append(logPrecall)
+      else:
+        loglik.append(np.log(-np.expm1(logPrecall)))
+  logposterior = fsum(loglik + [logprior])
+  return logposterior
+
+
+def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
+                         y: Union[list[float], np.ndarray],
+                         logPosterior: Union[list[float], np.ndarray],
+                         weightPower=1.0) -> dict:  # wls 4d
+  x = np.array(x)
+  y = np.array(y)
+  logPosterior = np.array(logPosterior)
+
+  A = np.vstack([np.log(x), -x, np.log(y), -y, np.ones_like(x)]).T
+  weights = np.diag(np.exp(logPosterior - np.max(logPosterior))**weightPower)
+  sol = lstsq(np.dot(weights, A), np.dot(weights, logPosterior))
+  t = sol[0]
+  alphax = t[0] + 1
+  betax = t[1]
+  alphay = t[2] + 1
+  betay = t[3]
+  assert all(x > 0 for x in [alphax, betax, alphay, betay]), 'positive gamma parameters'
+  return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
+
+
+def fullUpdate(
+    model: Model,
+    elapsed: float,
+    successes: Union[float, int],
+    total: int = 1,
+    now: Union[None, float] = None,
+    q0: Union[None, float] = None,
+    reinforcement: float = 1.0,
+    left=0.3,
+    right=1.0,
+) -> Model:
   ret = replace(model)
+  # ensure we add THIS quiz
   ret.elapseds.append(elapsed)
   res: Result
   if total == 1 and 0 < successes < 1:
@@ -257,42 +317,40 @@ def fullUpdate(model: Model,
   ret.results.append(res)
   ret.startStrengths.append(reinforcement)
 
-  ab, bb = ret.boostPrior
-  ah, bh = ret.halflifePrior
-  left = 0.3
-  right = 1.0
-
-  def posterior(b: float, h: float):
-    logb = np.log(b)
-    logh = np.log(h)
-    logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
-    logps = _makeLogPrecalls(
-        b, h, ret.results, ret.elapseds, ret.startStrengths, left=left, right=right)
-
-    loglik = []
-    for (res, logPrecall) in zip(ret.results, logps):
-      if isinstance(res, NoisyBinaryResult):
-        # noisy binary/Bernoulli
-        logPfail = np.log(-np.expm1(logPrecall))
-        z = success(res)
-        if z:
-          # Stan has this nice function, log_mix, which is perfect for this...
-          loglik.append(logsumexp([logPrecall + np.log(res.q1), logPfail + np.log(res.q0)]))
-        else:
-          loglik.append(logsumexp([logPrecall + np.log(1 - res.q1), logPfail + np.log(1 - res.q0)]))
-      else:
-        # binomial
-        if success(res):
-          loglik.append(logPrecall)
-        else:
-          loglik.append(np.log(-np.expm1(logPrecall)))
-    logposterior = fsum(loglik + [logprior])
-    return logposterior
+  posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
 
   MIN_BOOST = 1.0
+  ab, bb = ret.boostPrior
+  ah, bh = ret.halflifePrior
   maxBoost = gammarv.ppf(0.99, ab, scale=1.0 / bb)
   minHalflife, maxHalflife = gammarv.ppf([0.01, 0.99], ah, scale=1.0 / bh)
-  opt = shgo(lambda x: -posterior(*x), [(MIN_BOOST, maxBoost), (minHalflife, maxHalflife)])
+  opt = shgo(lambda x: -posterior2d(x[0], x[1]), [(MIN_BOOST, maxBoost),
+                                                  (minHalflife, maxHalflife)])
   bestb, besth = opt.x
+  bs = []
+  hs = []
+  posteriors = []
+  for b in np.linspace(MIN_BOOST, maxBoost, 101):
+    posteriors.append(posterior2d(b, besth))
+    bs.append(b)
+    hs.append(besth)
+  for h in np.linspace(minHalflife, maxHalflife, 101):
+    posteriors.append(posterior2d(bestb, h))
+    bs.append(bestb)
+    hs.append(h)
+  fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=3.0)
 
+  # update prior(s)
+  ret.boostPrior = (fit['alphax'], fit['betax'])
+  ret.halflifePrior = (fit['alphay'], fit['betay'])
+  # update SQL-friendly scalars
+  bmean, hmean = [_gammaToMean(*prior) for prior in [ret.boostPrior, ret.halflifePrior]]
+  futureHalflife = _makeLogPrecalls_Halflives(
+      bmean, hmean, ret.results, ret.elapseds, ret.startStrengths, left=left, right=right)[-1][1]
+  if reinforcement > 0:
+    ret.halflife = futureHalflife
+    ret.startTime = now or _timeMs()
+    ret.logStrength = np.log(reinforcement)
+  else:
+    ret.halflife = futureHalflife
   return ret
