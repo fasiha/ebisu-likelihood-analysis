@@ -180,13 +180,15 @@ def _simpleUpdateBinomial(model: Model,
   return ret
 
 
-def simpleUpdate(model: Model,
-                 elapsed: float,
-                 successes: Union[float, int],
-                 total: int = 1,
-                 now: Union[None, float] = None,
-                 q0: Union[None, float] = None,
-                 reinforcement: float = 1.0) -> Model:
+def simpleUpdateRecall(
+    model: Model,
+    elapsed: float,
+    successes: Union[float, int],
+    total: int = 1,
+    now: Union[None, float] = None,
+    q0: Union[None, float] = None,
+    reinforcement: float = 1.0,
+) -> Model:
   if total == 1 and (0 < successes < 1):
     return _simpleUpdateNoisy(
         model, elapsed, successes, now=now, q0=q0, reinforcement=reinforcement)
@@ -293,7 +295,7 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
   return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
 
 
-def fullUpdate(
+def fullUpdateRecall(
     model: Model,
     elapsed: float,
     successes: Union[float, int],
@@ -354,3 +356,12 @@ def fullUpdate(
   else:
     ret.halflife = futureHalflife
   return ret
+
+
+def predictRecall(model: Model, elapsedHours=None, logDomain=False) -> float:
+  MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
+  if elapsedHours is None:
+    now = _timeMs()
+    elapsedHours = (now - model.startTime) / MILLISECONDS_PER_HOUR
+  logPrecall = -elapsedHours / model.halflife * LOG_HALF + model.logStrength
+  return logPrecall if not logDomain else np.exp(logPrecall)
