@@ -3,7 +3,7 @@ from math import fsum
 import numpy as np  # type:ignore
 from scipy.optimize import shgo  #type: ignore
 from scipy.stats import gamma as gammarv  # type: ignore
-from scipy.special import kv, kve, gamma, betaln, logsumexp  #type: ignore
+from scipy.special import kv, kve, gammaln, gamma, betaln, logsumexp  #type: ignore
 from dataclasses import dataclass, replace
 from time import time_ns
 from functools import cache
@@ -45,7 +45,7 @@ class Model:
   startStrengths: list[float]  # 0 < x <= 1 (reinforcement). Same length as `elapseds`
 
   # priors
-  halflifePrior: tuple[float, float]  # alpha and beta
+  initHalflifePrior: tuple[float, float]  # alpha and beta
   boostPrior: tuple[float, float]  # alpha and beta
 
   # just for developer ease, these can be stored in SQL, etc.
@@ -76,6 +76,27 @@ def _timeMs() -> float:
   return time_ns() / 1_000_000
 
 
+LN2 = np.log(2)
+MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
+
+
+def _intGammaPdfExp(a: float, b: float, c: float, logDomain: bool):
+  # $s(a,b,c) = \int_0^∞ h^(a-1) \exp(-b h - c / h) dh$, via sympy
+  z = 2 * np.sqrt(b * c)  # arg to kv
+  if not logDomain:
+    return 2 * (c / b)**(a * 0.5) * kv(a, z)
+  # s = lambda a, b, c: 2 * (c / b)**(a * 0.5) * kv(-a, 2 * np.sqrt(b * c))
+  # `kve = kv * exp(z)` -> `log(kve) = log(kv) + z` -> `log(kv) = log(kve) - z`
+  return LN2 + np.log(c / b) * (a * 0.5) + np.log(kve(a, z)) - z
+
+
+def _currentHalflifePrior(model: Model) -> tuple[tuple[float, float], float]:
+  # if X ~ Gamma(a, b), (c*X) ~ Gamma(a, c*b)
+  a0, b0 = model.initHalflifePrior
+  boosted = model.halflife / _gammaToMean(a0, b0)
+  return (a0, boosted * b0), boosted
+
+
 def _simpleUpdateNoisy(model: Model,
                        elapsed: float,
                        result: float,
@@ -88,10 +109,9 @@ def _simpleUpdateNoisy(model: Model,
 
   qz = (q0, q1) if z else (1 - q0, 1 - q1)
 
-  # $s(a,b,c) = \int_0^∞ h^(a-1) \exp(-b h - c / h) dh$, via sympy
-  s = lambda a, b, c: 2 * (c / b)**(a * 0.5) * kv(-a, 2 * np.sqrt(b * c))
+  s = lambda a, b, c: _intGammaPdfExp(a, b, c, logDomain=False)
 
-  a, b = model.halflifePrior
+  (a, b), totalBoost = _currentHalflifePrior(model)
   t = elapsed
 
   def moment(n):
@@ -105,7 +125,7 @@ def _simpleUpdateNoisy(model: Model,
   newAlpha, newBeta = _meanVarToGamma(mean, var)
 
   ret = replace(model)  # clone
-  ret.halflifePrior = (newAlpha, newBeta)
+  ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
   ret.elapseds.append(elapsed)
   ret.results.append(NoisyBinaryResult(result=result, q1=q1, q0=q0))
   ret.startStrengths.append(reinforcement)
@@ -132,24 +152,16 @@ def _simpleUpdateBinomial(model: Model,
                           total: int,
                           now: Union[None, float] = None,
                           reinforcement: float = 1.0) -> Model:
-  LN2 = np.log(2)
-
-  def logs(a: float, b: float, c: float):
-    # s = lambda a, b, c: 2 * (c / b)**(a * 0.5) * kv(-a, 2 * np.sqrt(b * c))
-    # `kve = kv * exp(z)` -> `log(kve) = log(kv) + z` -> `log(kv) = log(kve) - z`
-    z = 2 * np.sqrt(b * c)  # arg to kv
-    return LN2 + np.log(c / b) * (a * 0.5) + np.log(kve(a, z)) - z
-
   k = successes
   n = total
-  a, b = model.halflifePrior
+  (a, b), totalBoost = _currentHalflifePrior(model)
   t = elapsed
 
   def logmoment(nth) -> float:
     loglik = []
     scales = []
     for i in range(0, n - k + 1):
-      loglik.append(_binomln(n, i) + logs(a + nth, b, t * (k + i)))
+      loglik.append(_binomln(n, i) + _intGammaPdfExp(a + nth, b, t * (k + i), logDomain=True))
       scales.append((-1)**i)
     return logsumexp(loglik, b=scales)
 
@@ -163,7 +175,7 @@ def _simpleUpdateBinomial(model: Model,
 
   ret = replace(model)  # clone
   # update prior(s)
-  ret.halflifePrior = (newAlpha, newBeta)
+  ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
   # ensure we add THIS quiz
   ret.elapseds.append(elapsed)
   ret.results.append(BinomialResult(successes=successes, total=total))
@@ -206,9 +218,6 @@ def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
   return (y1 * (1 - mu) + y2 * mu)
 
 
-LOG_HALF = -np.log(0.5)
-
-
 def _makeLogPrecalls_Halflives(b: float,
                                h: float,
                                results: list[Result],
@@ -228,7 +237,7 @@ def _makeLogPrecalls_Halflives(b: float,
 
   def reduction(prev: Reduced, curr: tuple[Result, float, float]) -> Reduced:
     res, t, r = curr
-    logp = -(t + prev["t0"]) / prev["h"] * LOG_HALF + (np.log(prev["r"]) if prev["r"] > 0 else 0)
+    logp = -(t + prev["t0"]) / prev["h"] * LN2 + (np.log(prev["r"]) if prev["r"] > 0 else 0)
 
     if success(res) and r > 0:
       newh = prev["h"] * _clampLerp2(left * prev["h"], right * prev["h"], min(b, 1.0), maxb, t)
@@ -246,7 +255,7 @@ def _makeLogPrecalls_Halflives(b: float,
 
 def _posterior(b: float, h: float, ret: Model, left: float, right: float):
   ab, bb = ret.boostPrior
-  ah, bh = ret.halflifePrior
+  ah, bh = ret.initHalflifePrior
 
   logb = np.log(b)
   logh = np.log(h)
@@ -323,7 +332,7 @@ def fullUpdateRecall(
 
   MIN_BOOST = 1.0
   ab, bb = ret.boostPrior
-  ah, bh = ret.halflifePrior
+  ah, bh = ret.initHalflifePrior
   maxBoost = gammarv.ppf(0.99, ab, scale=1.0 / bb)
   minHalflife, maxHalflife = gammarv.ppf([0.01, 0.99], ah, scale=1.0 / bh)
   opt = shgo(lambda x: -posterior2d(x[0], x[1]), [(MIN_BOOST, maxBoost),
@@ -344,9 +353,9 @@ def fullUpdateRecall(
 
   # update prior(s)
   ret.boostPrior = (fit['alphax'], fit['betax'])
-  ret.halflifePrior = (fit['alphay'], fit['betay'])
+  ret.initHalflifePrior = (fit['alphay'], fit['betay'])
   # update SQL-friendly scalars
-  bmean, hmean = [_gammaToMean(*prior) for prior in [ret.boostPrior, ret.halflifePrior]]
+  bmean, hmean = [_gammaToMean(*prior) for prior in [ret.boostPrior, ret.initHalflifePrior]]
   futureHalflife = _makeLogPrecalls_Halflives(
       bmean, hmean, ret.results, ret.elapseds, ret.startStrengths, left=left, right=right)[-1][1]
   if reinforcement > 0:
@@ -359,9 +368,8 @@ def fullUpdateRecall(
 
 
 def predictRecall(model: Model, elapsedHours=None, logDomain=False) -> float:
-  MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
   if elapsedHours is None:
     now = _timeMs()
     elapsedHours = (now - model.startTime) / MILLISECONDS_PER_HOUR
-  logPrecall = -elapsedHours / model.halflife * LOG_HALF + model.logStrength
+  logPrecall = -elapsedHours / model.halflife * LN2 + model.logStrength
   return logPrecall if not logDomain else np.exp(logPrecall)
