@@ -52,7 +52,7 @@ class Model:
   # halflife is proportional to `logStrength - (startTime * CONSTANT) / halflife`
   # where `CONSTANT` converts `startTime` to same units as `halflife`.
   startTime: float  # unix epoch
-  halflife: float  # mean or mode? Same units as `elapseds`
+  currentHalflife: float  # mean or mode? Same units as `elapseds`
   logStrength: float
 
 
@@ -93,7 +93,7 @@ def _intGammaPdfExp(a: float, b: float, c: float, logDomain: bool):
 def _currentHalflifePrior(model: Model) -> tuple[tuple[float, float], float]:
   # if X ~ Gamma(a, b), (c*X) ~ Gamma(a, c*b)
   a0, b0 = model.initHalflifePrior
-  boosted = model.halflife / _gammaToMean(a0, b0)
+  boosted = model.currentHalflife / _gammaToMean(a0, b0)
   return (a0, boosted * b0), boosted
 
 
@@ -131,11 +131,11 @@ def _simpleUpdateNoisy(model: Model,
   ret.startStrengths.append(reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
   if reinforcement > 0:
-    ret.halflife = mean * boostMean
+    ret.currentHalflife = mean * boostMean
     ret.startTime = now or _timeMs()
     ret.logStrength = np.log(reinforcement)
   else:
-    ret.halflife = mean * boostMean
+    ret.currentHalflife = mean * boostMean
 
   return ret
 
@@ -183,11 +183,11 @@ def _simpleUpdateBinomial(model: Model,
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
   # update SQL-friendly scalars
   if reinforcement > 0:
-    ret.halflife = mean * boostMean
+    ret.currentHalflife = mean * boostMean
     ret.startTime = now or _timeMs()
     ret.logStrength = np.log(reinforcement)
   else:
-    ret.halflife = mean * boostMean
+    ret.currentHalflife = mean * boostMean
 
   return ret
 
@@ -359,11 +359,11 @@ def fullUpdateRecall(
   futureHalflife = _makeLogPrecalls_Halflives(
       bmean, hmean, ret.results, ret.elapseds, ret.startStrengths, left=left, right=right)[-1][1]
   if reinforcement > 0:
-    ret.halflife = futureHalflife
+    ret.currentHalflife = futureHalflife
     ret.startTime = now or _timeMs()
     ret.logStrength = np.log(reinforcement)
   else:
-    ret.halflife = futureHalflife
+    ret.currentHalflife = futureHalflife
   return ret
 
 
@@ -371,7 +371,7 @@ def _predictRecall(model: Model, elapsedHours=None, logDomain=False) -> float:
   if elapsedHours is None:
     now = _timeMs()
     elapsedHours = (now - model.startTime) / MILLISECONDS_PER_HOUR
-  logPrecall = -elapsedHours / model.halflife * LN2 + model.logStrength
+  logPrecall = -elapsedHours / model.currentHalflife * LN2 + model.logStrength
   return logPrecall if not logDomain else np.exp(logPrecall)
 
 
