@@ -367,9 +367,19 @@ def fullUpdateRecall(
   return ret
 
 
-def predictRecall(model: Model, elapsedHours=None, logDomain=False) -> float:
+def _predictRecall(model: Model, elapsedHours=None, logDomain=False) -> float:
   if elapsedHours is None:
     now = _timeMs()
     elapsedHours = (now - model.startTime) / MILLISECONDS_PER_HOUR
   logPrecall = -elapsedHours / model.halflife * LN2 + model.logStrength
+  return logPrecall if not logDomain else np.exp(logPrecall)
+
+
+def _predictRecallBayesian(model: Model, elapsedHours=None, logDomain=False) -> float:
+  if elapsedHours is None:
+    now = _timeMs()
+    elapsedHours = (now - model.startTime) / MILLISECONDS_PER_HOUR
+
+  (a, b), _totalBoost = _currentHalflifePrior(model)
+  logPrecall = _intGammaPdfExp(a, b, elapsedHours, logDomain=True) + a * np.log(b) - gammaln(a)
   return logPrecall if not logDomain else np.exp(logPrecall)
