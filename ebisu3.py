@@ -37,12 +37,13 @@ def success(res: Result) -> bool:
 
 @dataclass
 class Model:
-  elapseds: list[float]  # your choice of time units; possibly empty
+  elapseds: list[list[float]]  # I think this has to be hours; possibly empty
 
-  # same length as `elapseds`
-  results: list[Result]
+  # same length as `elapseds`, and each sub-list has the same length
+  results: list[list[Result]]
 
-  startStrengths: list[float]  # 0 < x <= 1 (reinforcement). Same length as `elapseds`
+  # 0 < x <= 1 (reinforcement). Same length/sub-lengths as `elapseds`
+  startStrengths: list[list[float]]
 
   # priors
   initHalflifePrior: tuple[float, float]  # alpha and beta
@@ -54,6 +55,25 @@ class Model:
   startTime: float  # unix epoch
   currentHalflife: float  # mean or mode? Same units as `elapseds`
   logStrength: float
+
+
+def _appendQuiz(model: Model, elapsed: float, result: Result, startStrength: float) -> None:
+  # IMPURE
+
+  if len(model.elapseds) == 0:
+    model.elapseds = [[elapsed]]
+  else:
+    model.elapseds[-1].append(elapsed)
+
+  if len(model.results) == 0:
+    model.results = [[result]]
+  else:
+    model.results[-1].append(result)
+
+  if len(model.startStrengths) == 0:
+    model.startStrengths = [[startStrength]]
+  else:
+    model.startStrengths[-1].append(startStrength)
 
 
 def _gammaToMean(alpha: float, beta: float) -> float:
@@ -126,9 +146,7 @@ def _simpleUpdateNoisy(model: Model,
 
   ret = replace(model)  # clone
   ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
-  ret.elapseds.append(elapsed)
-  ret.results.append(NoisyBinaryResult(result=result, q1=q1, q0=q0))
-  ret.startStrengths.append(reinforcement)
+  _appendQuiz(ret, elapsed, NoisyBinaryResult(result=result, q1=q1, q0=q0), reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
   if reinforcement > 0:
     ret.currentHalflife = mean * boostMean
@@ -177,9 +195,7 @@ def _simpleUpdateBinomial(model: Model,
   # update prior(s)
   ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
   # ensure we add THIS quiz
-  ret.elapseds.append(elapsed)
-  ret.results.append(BinomialResult(successes=successes, total=total))
-  ret.startStrengths.append(reinforcement)
+  _appendQuiz(ret, elapsed, BinomialResult(successes=successes, total=total), reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
   # update SQL-friendly scalars
   if reinforcement > 0:
@@ -261,10 +277,10 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float):
   logh = np.log(h)
   logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
   logpHls = _makeLogPrecalls_Halflives(
-      b, h, ret.results, ret.elapseds, ret.startStrengths, left=left, right=right)
+      b, h, ret.results[-1], ret.elapseds[-1], ret.startStrengths[-1], left=left, right=right)
 
   loglik = []
-  for (res, (logPrecall, _halflife)) in zip(ret.results, logpHls):
+  for (res, (logPrecall, _halflife)) in zip(ret.results[-1], logpHls):
     if isinstance(res, NoisyBinaryResult):
       # noisy binary/Bernoulli
       logPfail = np.log(-np.expm1(logPrecall))
@@ -317,7 +333,6 @@ def fullUpdateRecall(
 ) -> Model:
   ret = replace(model)
   # ensure we add THIS quiz
-  ret.elapseds.append(elapsed)
   res: Result
   if total == 1 and 0 < successes < 1:
     q1 = max(successes, 1 - successes)
@@ -325,8 +340,7 @@ def fullUpdateRecall(
   else:
     assert successes == np.floor(successes), "float `successes` implies `total==1`"
     res = BinomialResult(successes=int(successes), total=total)
-  ret.results.append(res)
-  ret.startStrengths.append(reinforcement)
+  _appendQuiz(ret, elapsed, res, reinforcement)
 
   posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
 
@@ -357,7 +371,13 @@ def fullUpdateRecall(
   # update SQL-friendly scalars
   bmean, hmean = [_gammaToMean(*prior) for prior in [ret.boostPrior, ret.initHalflifePrior]]
   futureHalflife = _makeLogPrecalls_Halflives(
-      bmean, hmean, ret.results, ret.elapseds, ret.startStrengths, left=left, right=right)[-1][1]
+      bmean,
+      hmean,
+      ret.results[-1],
+      ret.elapseds[-1],
+      ret.startStrengths[-1],
+      left=left,
+      right=right)[-1][1]
   if reinforcement > 0:
     ret.currentHalflife = futureHalflife
     ret.startTime = now or _timeMs()
@@ -383,3 +403,25 @@ def _predictRecallBayesian(model: Model, elapsedHours=None, logDomain=False) -> 
   (a, b), _totalBoost = _currentHalflifePrior(model)
   logPrecall = _intGammaPdfExp(a, b, elapsedHours, logDomain=True) + a * np.log(b) - gammaln(a)
   return logPrecall if not logDomain else np.exp(logPrecall)
+
+
+def reinitializeWithNewHalflife(
+    model: Model,
+    newMean: float,
+    newStd: float,
+    startTime: Union[float, None] = None,
+    strength: float = 1.0,
+) -> Model:
+  ret = replace(model)
+  ret.elapseds.append([])
+  ret.results.append([])
+  ret.startStrengths.append([])
+
+  ret.initHalflifePrior = _meanVarToGamma(newMean, newStd**2)
+  ret.currentHalflife = newMean
+  if startTime:
+    ret.startTime = startTime
+  else:
+    ret.startTime = _timeMs()
+  ret.logStrength = np.log(strength)
+  return ret
