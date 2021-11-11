@@ -331,6 +331,9 @@ def fullUpdateRecall(
     left=0.3,
     right=1.0,
 ) -> Model:
+  if len(model.elapseds[-1]) == 0 or len(model.elapseds[-1]) < 2:
+    return simpleUpdateRecall(
+        model, elapsed, successes, total=total, now=now, q0=q0, reinforcement=reinforcement)
   ret = replace(model)
   # ensure we add THIS quiz
   res: Result
