@@ -117,12 +117,16 @@ def _currentHalflifePrior(model: Model) -> tuple[tuple[float, float], float]:
   return (a0, boosted * b0), boosted
 
 
-def _simpleUpdateNoisy(model: Model,
-                       elapsed: float,
-                       result: float,
-                       now: Union[None, float] = None,
-                       q0: Union[None, float] = None,
-                       reinforcement: float = 1.0) -> Model:
+def _simpleUpdateNoisy(
+    model: Model,
+    elapsed: float,
+    result: float,
+    now: Union[None, float] = None,
+    q0: Union[None, float] = None,
+    reinforcement: float = 1.0,
+    left=0.3,
+    right=1.0,
+) -> Model:
   q1 = max(result, 1 - result)  # between 0.5 and 1
   q0 = 1 - q1 if q0 is None else q0  # either the input argument OR between 0 and 0.5
   z = result >= 0.5
@@ -148,12 +152,13 @@ def _simpleUpdateNoisy(model: Model,
   ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
   _appendQuiz(ret, elapsed, NoisyBinaryResult(result=result, q1=q1, q0=q0), reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
+  boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
   if reinforcement > 0:
-    ret.currentHalflife = mean * boostMean
+    ret.currentHalflife = boostedHl
     ret.startTime = now or _timeMs()
     ret.logStrength = np.log(reinforcement)
   else:
-    ret.currentHalflife = mean * boostMean
+    ret.currentHalflife = boostedHl
 
   return ret
 
@@ -164,12 +169,16 @@ def _binomln(n, k):
   return -betaln(1 + n - k, 1 + k) - np.log(n + 1)
 
 
-def _simpleUpdateBinomial(model: Model,
-                          elapsed: float,
-                          successes: int,
-                          total: int,
-                          now: Union[None, float] = None,
-                          reinforcement: float = 1.0) -> Model:
+def _simpleUpdateBinomial(
+    model: Model,
+    elapsed: float,
+    successes: int,
+    total: int,
+    now: Union[None, float] = None,
+    reinforcement: float = 1.0,
+    left=0.3,
+    right=1.0,
+) -> Model:
   k = successes
   n = total
   (a, b), totalBoost = _currentHalflifePrior(model)
@@ -197,13 +206,14 @@ def _simpleUpdateBinomial(model: Model,
   # ensure we add THIS quiz
   _appendQuiz(ret, elapsed, BinomialResult(successes=successes, total=total), reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
+  boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
   # update SQL-friendly scalars
   if reinforcement > 0:
-    ret.currentHalflife = mean * boostMean
+    ret.currentHalflife = boostedHl
     ret.startTime = now or _timeMs()
     ret.logStrength = np.log(reinforcement)
   else:
-    ret.currentHalflife = mean * boostMean
+    ret.currentHalflife = boostedHl
 
   return ret
 
