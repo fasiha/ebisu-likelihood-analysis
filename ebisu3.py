@@ -401,7 +401,8 @@ def _predictRecallBayesian(model: Model, elapsedHours=None, logDomain=False) -> 
     elapsedHours = (now - model.startTime) / MILLISECONDS_PER_HOUR
 
   (a, b), _totalBoost = _currentHalflifePrior(model)
-  logPrecall = _intGammaPdfExp(a, b, elapsedHours, logDomain=True) + a * np.log(b) - gammaln(a)
+  logPrecall = _intGammaPdfExp(
+      a, b, elapsedHours * LN2, logDomain=True) + a * np.log(b) - gammaln(a) + model.logStrength
   return logPrecall if not logDomain else np.exp(logPrecall)
 
 
