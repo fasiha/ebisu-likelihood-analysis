@@ -390,7 +390,9 @@ def ankiFitEasyHardMAP(xs: list[int],
   summary = []
   halflives = makeHalflives(bestb, besth, xs, ts, left, right, boostRule)
   for x, t, h in zip(xs, ts, halflives):
-    summary.append(f'{x}@{t:0.2f} {"🔥" if x<2 else ""} p={np.exp(-t/h):0.2f}, hl={h:0.1f}')
+    summary.append(
+        f'{x}@{t:0.2f} {"🔥" if x<2 else ""} (halflife was {h:0.1f} hours) pRecall={np.exp(-t/h):0.2f}'
+    )
 
   return dict(
       boostSamples=np.array(boostSamples),
