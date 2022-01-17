@@ -53,7 +53,7 @@ class Model:
   # halflife is proportional to `logStrength - (startTime * CONSTANT) / halflife`
   # where `CONSTANT` converts `startTime` to same units as `halflife`.
   startTime: float  # unix epoch
-  currentHalflife: float  # mean or mode? Same units as `elapseds`
+  currentHalflife: float  # mean (so _currentHalflifePrior works). Same units as `elapseds`
   logStrength: float
 
 
