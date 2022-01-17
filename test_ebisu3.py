@@ -37,23 +37,26 @@ class TestEbisu(unittest.TestCase):
         logStrength=0.0,
     )
 
-    elapsedHours = 1.0  # hours
+    updateds: list[ebisu.Model] = []
+    for fraction in [0.1, 0.5, 1.0, 2.0, 10.0]:
+      for result in [0, 1]:
+        elapsedHours = fraction * initHlMean
+        updated = ebisu.simpleUpdateRecall(
+            init,
+            elapsedHours,
+            result,
+            total=1,
+            now=nowMs + elapsedHours * MILLISECONDS_PER_HOUR,
+            reinforcement=1.0)
 
-    print('init', init)
-    for elapsedHours in [1.0, 6.5, 10, 20]:
-      updated = ebisu.simpleUpdateRecall(
-          init,
-          elapsedHours,
-          1,
-          total=1,
-          now=nowMs + elapsedHours * MILLISECONDS_PER_HOUR,
-          reinforcement=1.0)
-      print('posterior inithl mean', ebisu._gammaToMean(*updated.initHalflifePrior))
-      print('currhl / inithl',
-            updated.currentHalflife / ebisu._gammaToMean(*updated.initHalflifePrior))
-      print('updated', updated)
+        msg = f'result={result}, fraction={fraction} => currHl={updated.currentHalflife}'
+        if result:
+          self.assertTrue(updated.currentHalflife >= initHlMean, msg)
+        else:
+          self.assertTrue(updated.currentHalflife <= initHlMean, msg)
 
-    self.assertTrue(updated, "yay")
+        updateds.append(updated)
+    # print(updateds)
 
 
 if __name__ == '__main__':
