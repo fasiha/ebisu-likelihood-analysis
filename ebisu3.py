@@ -100,12 +100,21 @@ LN2 = np.log(2)
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 
 
+def _intGammaPdf(a: float, b: float, logDomain: bool):
+  # \int_0^∞ h^(a-1) \exp(-b h) dh$, via Wolfram Alpha, etc.
+  if not logDomain:
+    return b**(-a) * gamma(a)
+  return -a * np.log(b) + gammaln(a)
+
+
 def _intGammaPdfExp(a: float, b: float, c: float, logDomain: bool):
   # $s(a,b,c) = \int_0^∞ h^(a-1) \exp(-b h - c / h) dh$, via sympy
+  if c == 0:
+    return _intGammaPdf(a, b, logDomain=logDomain)
+
   z = 2 * np.sqrt(b * c)  # arg to kv
   if not logDomain:
     return 2 * (c / b)**(a * 0.5) * kv(a, z)
-  # s = lambda a, b, c: 2 * (c / b)**(a * 0.5) * kv(-a, 2 * np.sqrt(b * c))
   # `kve = kv * exp(z)` -> `log(kve) = log(kv) + z` -> `log(kv) = log(kve) - z`
   return LN2 + np.log(c / b) * (a * 0.5) + np.log(kve(a, z)) - z
 
@@ -150,9 +159,13 @@ def _simpleUpdateNoisy(
 
   ret = replace(model)  # clone
   ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
-  _appendQuiz(ret, elapsed, NoisyBinaryResult(result=result, q1=q1, q0=q0), reinforcement)
+  resultObj = NoisyBinaryResult(result=result, q1=q1, q0=q0)
+  _appendQuiz(ret, elapsed, resultObj, reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
-  boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
+  if success(resultObj):
+    boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
+  else:
+    boostedHl = mean
   if reinforcement > 0:
     ret.currentHalflife = boostedHl
     ret.startTime = now or _timeMs()
@@ -204,9 +217,13 @@ def _simpleUpdateBinomial(
   # update prior(s)
   ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
   # ensure we add THIS quiz
-  _appendQuiz(ret, elapsed, BinomialResult(successes=successes, total=total), reinforcement)
+  result = BinomialResult(successes=successes, total=total)
+  _appendQuiz(ret, elapsed, result, reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
-  boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
+  if success(result):
+    boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
+  else:
+    boostedHl = mean
   # update SQL-friendly scalars
   if reinforcement > 0:
     ret.currentHalflife = boostedHl
