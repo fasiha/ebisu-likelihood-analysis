@@ -39,9 +39,9 @@ class TestEbisu(unittest.TestCase):
       for result in [0, 1]:
         updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
         if result:
-          self.assertTrue(np.exp(updated.logmean) >= initHlMean)
+          self.assertTrue(updated.mean >= initHlMean)
         else:
-          self.assertTrue(np.exp(updated.logmean) <= initHlMean)
+          self.assertTrue(updated.mean <= initHlMean)
 
   def test_simple(self):
     initHlMean = 10  # hours

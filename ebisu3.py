@@ -163,59 +163,13 @@ def _gammaUpdateNoisy(a: float, b: float, t: float, q1: float, q0: float, z: boo
   return GammaUpdate(a=newAlpha, b=newBeta, mean=mean)
 
 
-def _simpleUpdateNoisy(
-    model: Model,
-    elapsed: float,
-    result: float,
-    now: Union[None, float] = None,
-    q0: Union[None, float] = None,
-    reinforcement: float = 1.0,
-    left=0.3,
-    right=1.0,
-) -> Model:
-  q1 = max(result, 1 - result)  # between 0.5 and 1
-  q0 = 1 - q1 if q0 is None else q0  # either the input argument OR between 0 and 0.5
-  z = result >= 0.5
-
-  (a, b), totalBoost = _currentHalflifePrior(model)
-  t = elapsed
-
-  updated = _gammaUpdateNoisy(a, b, t, q1, q0, z)
-  mean, newAlpha, newBeta = (updated.mean, updated.a, updated.b)
-
-  ret = replace(model)  # clone
-  ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
-  resultObj = NoisyBinaryResult(result=result, q1=q1, q0=q0)
-  _appendQuiz(ret, elapsed, resultObj, reinforcement)
-  boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
-  if success(resultObj):
-    boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
-  else:
-    boostedHl = mean
-  if reinforcement > 0:
-    ret.currentHalflife = boostedHl
-    ret.startTime = now or _timeMs()
-    ret.logStrength = np.log(reinforcement)
-  else:
-    ret.currentHalflife = boostedHl
-
-  return ret
-
-
 @cache
 def _binomln(n, k):
   "Log of scipy.special.binom calculated entirely in the log domain"
   return -betaln(1 + n - k, 1 + k) - np.log(n + 1)
 
 
-@dataclass
-class GammaUpdateLog:
-  a: float
-  b: float
-  logmean: float
-
-
-def _gammaUpdateBinomial(a: float, b: float, t: float, k: int, n: int) -> GammaUpdateLog:
+def _gammaUpdateBinomial(a: float, b: float, t: float, k: int, n: int) -> GammaUpdate:
   """Core Ebisu v2-style Bayesian update on binomial quizzes
 
   Assuming a halflife $h ~ Gamma(a, b)$ and a Binomial quiz at time $t$
@@ -244,49 +198,7 @@ def _gammaUpdateBinomial(a: float, b: float, t: float, k: int, n: int) -> GammaU
   logvar = logsumexp([logm2, 2 * logmean], b=[1, -1])
   newAlpha, newBeta = _logmeanlogVarToGamma(logmean, logvar)
 
-  return GammaUpdateLog(a=newAlpha, b=newBeta, logmean=logmean)
-
-
-def _simpleUpdateBinomial(
-    model: Model,
-    elapsed: float,
-    successes: int,
-    total: int,
-    now: Union[None, float] = None,
-    reinforcement: float = 1.0,
-    left=0.3,
-    right=1.0,
-) -> Model:
-  k = successes
-  n = total
-  (a, b), totalBoost = _currentHalflifePrior(model)
-  t = elapsed
-
-  updated = _gammaUpdateBinomial(a, b, t, k, n)
-  logmean, newAlpha, newBeta = (updated.logmean, updated.a, updated.b)
-
-  mean = np.exp(logmean)
-
-  ret = replace(model)  # clone
-  # update prior(s)
-  ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
-  # ensure we add THIS quiz
-  result = BinomialResult(successes=successes, total=total)
-  _appendQuiz(ret, elapsed, result, reinforcement)
-  boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
-  if success(result):
-    boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
-  else:
-    boostedHl = mean
-  # update SQL-friendly scalars
-  if reinforcement > 0:
-    ret.currentHalflife = boostedHl
-    ret.startTime = now or _timeMs()
-    ret.logStrength = np.log(reinforcement)
-  else:
-    ret.currentHalflife = boostedHl
-
-  return ret
+  return GammaUpdate(a=newAlpha, b=newBeta, mean=np.exp(logmean))
 
 
 def simpleUpdateRecall(
@@ -297,13 +209,45 @@ def simpleUpdateRecall(
     now: Union[None, float] = None,
     q0: Union[None, float] = None,
     reinforcement: float = 1.0,
+    left=0.3,
+    right=1.0,
 ) -> Model:
+  (a, b), totalBoost = _currentHalflifePrior(model)
+  t = elapsed
+  resultObj: Union[NoisyBinaryResult, BinomialResult]
+
   if total == 1 and (0 < successes < 1):
-    return _simpleUpdateNoisy(
-        model, elapsed, successes, now=now, q0=q0, reinforcement=reinforcement)
-  assert successes == np.floor(successes), "float `successes` implies `total==1`"
-  return _simpleUpdateBinomial(
-      model, elapsed, int(successes), total, now=now, reinforcement=reinforcement)
+    q1 = max(successes, 1 - successes)  # between 0.5 and 1
+    q0 = 1 - q1 if q0 is None else q0  # either the input argument OR between 0 and 0.5
+    z = successes >= 0.5
+    updated = _gammaUpdateNoisy(a, b, t, q1, q0, z)
+    resultObj = NoisyBinaryResult(result=successes, q1=q1, q0=q0)
+
+  else:
+    assert successes == np.floor(successes), "float `successes` implies `total==1`"
+    k = int(successes)
+    n = total
+    updated = _gammaUpdateBinomial(a, b, t, k, n)
+    resultObj = BinomialResult(successes=k, total=n)
+
+  mean, newAlpha, newBeta = (updated.mean, updated.a, updated.b)
+
+  ret = replace(model)  # clone
+  ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
+  _appendQuiz(ret, elapsed, resultObj, reinforcement)
+  boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
+  if success(resultObj):
+    boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
+  else:
+    boostedHl = mean
+  if reinforcement > 0:
+    ret.currentHalflife = boostedHl
+    ret.startTime = now or _timeMs()
+    ret.logStrength = np.log(reinforcement)
+  else:
+    ret.currentHalflife = boostedHl
+
+  return ret
 
 
 def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
