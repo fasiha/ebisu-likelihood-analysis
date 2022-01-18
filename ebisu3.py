@@ -126,6 +126,43 @@ def _currentHalflifePrior(model: Model) -> tuple[tuple[float, float], float]:
   return (a0, boosted * b0), boosted
 
 
+@dataclass
+class GammaUpdate:
+  a: float
+  b: float
+  mean: float
+
+
+def _gammaUpdateNoisy(a: float, b: float, t: float, q1: float, q0: float, z: bool) -> GammaUpdate:
+  """Core Ebisu v2-style Bayesian update on noisy binary quizzes
+
+  Assuming a halflife $h ~ Gamma(a, b)$, a hidden quiz result $x ~
+  Bernoulli(2^(t/h))$ (for $t$ time elapsed since review), and an
+  observed *noisy* quiz report $z|x ~ Bernoulli(q0, q1)$, this function
+  computes moments of the true posterior $h|z$, which is a nonstandard
+  distribution, approximates it to a new $Gamma(newA, newB)$ and returns
+  that approximate posterior.
+
+  Note that all probabilistic parameters are assumed to be known: $a, b,
+  q0, q1$, as are data $t, z$. Only $x$, the true quiz result is
+  unknown, as well as of course the true halflife.
+
+  See also `_gammaUpdateBinomial`.
+  """
+  qz = (q0, q1) if z else (1 - q0, 1 - q1)
+
+  def moment(n):
+    an = a + n
+    return _intGammaPdfExp(an, b, t, logDomain=False) * (qz[1] - qz[0]) + qz[0] * gamma(an) / b**an
+
+  m0 = moment(0)
+  mean = moment(1) / m0
+  m2 = moment(2) / m0
+  var = m2 - mean**2
+  newAlpha, newBeta = _meanVarToGamma(mean, var)
+  return GammaUpdate(a=newAlpha, b=newBeta, mean=mean)
+
+
 def _simpleUpdateNoisy(
     model: Model,
     elapsed: float,
@@ -140,22 +177,11 @@ def _simpleUpdateNoisy(
   q0 = 1 - q1 if q0 is None else q0  # either the input argument OR between 0 and 0.5
   z = result >= 0.5
 
-  qz = (q0, q1) if z else (1 - q0, 1 - q1)
-
-  s = lambda a, b, c: _intGammaPdfExp(a, b, c, logDomain=False)
-
   (a, b), totalBoost = _currentHalflifePrior(model)
   t = elapsed
 
-  def moment(n):
-    an = a + n
-    return s(an, b, t) * qz[1] + qz[0] * gamma(an) / b**an - s(an, b, t) * qz[0]
-
-  m0 = moment(0)
-  mean = moment(1) / m0
-  m2 = moment(2) / m0
-  var = m2 - mean**2
-  newAlpha, newBeta = _meanVarToGamma(mean, var)
+  updated = _gammaUpdateNoisy(a, b, t, q1, q0, z)
+  mean, newAlpha, newBeta = (updated.mean, updated.a, updated.b)
 
   ret = replace(model)  # clone
   ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
@@ -182,6 +208,45 @@ def _binomln(n, k):
   return -betaln(1 + n - k, 1 + k) - np.log(n + 1)
 
 
+@dataclass
+class GammaUpdateLog:
+  a: float
+  b: float
+  logmean: float
+
+
+def _gammaUpdateBinomial(a: float, b: float, t: float, k: int, n: int) -> GammaUpdateLog:
+  """Core Ebisu v2-style Bayesian update on binomial quizzes
+
+  Assuming a halflife $h ~ Gamma(a, b)$ and a Binomial quiz at time $t$
+  resulting in $k ~ Binomial(n, 2^(t/h))$ successes out of a total $n$
+  trials, this function computes moments of the true posterior $h|k$,
+  which is a nonstandard distribution, approximates it to a new
+  $Gamma(newA, newB)$ and returns that approximate posterior.
+
+  Note that all probabilistic parameters are assumed to be known ($a,
+  b$), as are data parameters $t, n$, and experimental result $k$.
+
+  See also `_gammaUpdateNoisy`.
+  """
+
+  def logmoment(nth) -> float:
+    loglik = []
+    scales = []
+    for i in range(0, n - k + 1):
+      loglik.append(_binomln(n, i) + _intGammaPdfExp(a + nth, b, t * (k + i), logDomain=True))
+      scales.append((-1)**i)
+    return logsumexp(loglik, b=scales)
+
+  logm0 = logmoment(0)
+  logmean = logmoment(1) - logm0
+  logm2 = logmoment(2) - logm0
+  logvar = logsumexp([logm2, 2 * logmean], b=[1, -1])
+  newAlpha, newBeta = _logmeanlogVarToGamma(logmean, logvar)
+
+  return GammaUpdateLog(a=newAlpha, b=newBeta, logmean=logmean)
+
+
 def _simpleUpdateBinomial(
     model: Model,
     elapsed: float,
@@ -197,19 +262,8 @@ def _simpleUpdateBinomial(
   (a, b), totalBoost = _currentHalflifePrior(model)
   t = elapsed
 
-  def logmoment(nth) -> float:
-    loglik = []
-    scales = []
-    for i in range(0, n - k + 1):
-      loglik.append(_binomln(n, i) + _intGammaPdfExp(a + nth, b, t * (k + i), logDomain=True))
-      scales.append((-1)**i)
-    return logsumexp(loglik, b=scales)
-
-  logm0 = logmoment(0)
-  logmean = logmoment(1) - logm0
-  logm2 = logmoment(2) - logm0
-  logvar = logsumexp([logm2, 2 * logmean], b=[1, -1])
-  newAlpha, newBeta = _logmeanlogVarToGamma(logmean, logvar)
+  updated = _gammaUpdateBinomial(a, b, t, k, n)
+  logmean, newAlpha, newBeta = (updated.logmean, updated.a, updated.b)
 
   mean = np.exp(logmean)
 
