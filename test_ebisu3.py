@@ -7,7 +7,7 @@ $ python test_ebisu3.py
 
 import ebisu3 as ebisu
 import unittest
-import numpy as np
+import typing
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 
@@ -15,16 +15,24 @@ MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 class TestEbisu(unittest.TestCase):
 
   def test_gamma_update(self):
+    """Test _gammaUpdateNoisy and _gammaUpdateBinomial
+
+    These are the Ebisu v2-style updates, in that there's no boost, just a prior
+    on halflife and either quiz type. These have to be correct for the boost
+    mechanism to work.
+    """
     initHlMean = 10  # hours
     initHlBeta = 0.1
     initHlPrior = (initHlBeta * initHlMean, initHlBeta)
 
     a, b = initHlPrior
 
+    noisyTToUpdate: dict[float, list[ebisu.GammaUpdate]] = dict()
+    binomResultToUpdate: dict[int, list[ebisu.GammaUpdate]] = dict()
     for fraction in [0.1, 0.5, 1., 2., 10.]:
       t = initHlMean * fraction
 
-      for noisy in [0, 0.1, 0.3, 0.7, 0.9, 1]:
+      for noisy in [0.1, 0.3, 0.7, 0.9]:
         z = noisy >= 0.5
         q1 = noisy if z else 1 - noisy
         q0 = 1 - q1
@@ -35,6 +43,8 @@ class TestEbisu(unittest.TestCase):
           self.assertTrue(updated.mean >= initHlMean, msg)
         else:
           self.assertTrue(updated.mean <= initHlMean, msg)
+        sublist = noisyTToUpdate.setdefault(t, [])
+        sublist.append(updated)
 
       for result in [0, 1]:
         updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
@@ -42,8 +52,27 @@ class TestEbisu(unittest.TestCase):
           self.assertTrue(updated.mean >= initHlMean)
         else:
           self.assertTrue(updated.mean <= initHlMean)
+        sublist = binomResultToUpdate.setdefault(result, [])
+        sublist.append(updated)
+
+    # Binomial updates should be monotonic in `t`
+    for quizResult, updatedList in binomResultToUpdate.items():
+      for (l, r) in zip(updatedList, updatedList[1:]):
+        # `l` will be from a shorter quiz delay than `r`
+        self.assertTrue(l.mean < r.mean)
+
+    # the above test doesn't make sense for `noisyUpdates`: for non-zero q0,
+    # we get non-asymptotic results for high `t`: see
+    # https://github.com/fasiha/ebisu/issues/52
+
+    # Noisy updates should be monotonic in `z` (the noisy result)
+    for quizTime, updatedList in noisyTToUpdate.items():
+      for (l, r) in zip(updatedList, updatedList[1:]):
+        # `l` will have lower noisy quiz result than `r`
+        self.assertTrue(l.mean < r.mean)
 
   def test_simple(self):
+    """Test simple update: boosted"""
     initHlMean = 10  # hours
     initHlBeta = 0.1
     initHlPrior = (initHlBeta * initHlMean, initHlBeta)
