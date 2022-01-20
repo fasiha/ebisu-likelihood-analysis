@@ -120,10 +120,10 @@ def _intGammaPdfExp(a: float, b: float, c: float, logDomain: bool):
 
 
 def _currentHalflifePrior(model: Model) -> tuple[tuple[float, float], float]:
-  # if X ~ Gamma(a, b), (c*X) ~ Gamma(a, c*b)
+  # if X ~ Gamma(a, b), (c*X) ~ Gamma(a, 1/c*b)
   a0, b0 = model.initHalflifePrior
   boosted = model.currentHalflife / _gammaToMean(a0, b0)
-  return (a0, boosted * b0), boosted
+  return (a0, b0 / boosted), boosted
 
 
 @dataclass
