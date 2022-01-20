@@ -7,15 +7,54 @@ $ python test_ebisu3.py
 
 import ebisu3 as ebisu
 import unittest
-import typing
+from scipy.stats import gamma as gammarv, binom as binomrv  # type: ignore
+import numpy as np
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
+
+
+def _gammaUpdateBinomialMonteCarlo(
+    a: float,
+    b: float,
+    t: float,
+    k: int,
+    n: int,
+    size=1_000_000,
+) -> ebisu.GammaUpdate:
+  # Scipy Gamma random variable is inverted: it needs (a, scale=1/b) for the usual (a, b) parameterization
+  halflife = gammarv.rvs(a, scale=1 / b, size=size)
+  # pRecall = 2**(-t/halflife)
+  pRecall = np.exp(-t / halflife)
+  weight = binomrv.pmf(k, n, pRecall)  # this is the likelihood of observing the data
+
+  wsum = np.sum(weight)
+  # See https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Mathematical_definition
+  postMean = np.sum(weight * halflife) / wsum
+  # See https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Weighted_sample_variance
+  postVar = np.sum(weight * (halflife - postMean)**2) / wsum
+
+  if False:
+    # See https://en.wikipedia.org/w/index.php?title=Gamma_distribution&oldid=1066334959#Closed-form_estimators
+    # However, in Ebisu, we just have central moments of the posterior, not samples, and there doesn't seem to be
+    # an easy way to get a closed form "mixed type log-moment estimator" from moments.
+    h = halflife
+    w = weight
+    that2 = np.sum(w * h * np.log(h)) / wsum - np.sum(w * h) / wsum * np.sum(w * np.log(h)) / wsum
+    khat2 = np.sum(w * h) / wsum / that2
+    fit = (khat2, 1 / that2)
+
+  newA, newB = ebisu._meanVarToGamma(postMean, postVar)
+  return ebisu.GammaUpdate(newA, newB, postMean)
+
+
+def relativeError(actual: float, expected: float) -> float:
+  return abs(actual - expected) / abs(expected)
 
 
 class TestEbisu(unittest.TestCase):
 
   def test_gamma_update(self):
-    """Test _gammaUpdateNoisy and _gammaUpdateBinomial
+    """Test BASIC _gammaUpdateNoisy and _gammaUpdateBinomial
 
     These are the Ebisu v2-style updates, in that there's no boost, just a prior
     on halflife and either quiz type. These have to be correct for the boost
@@ -70,6 +109,23 @@ class TestEbisu(unittest.TestCase):
       for (l, r) in zip(updatedList, updatedList[1:]):
         # `l` will have lower noisy quiz result than `r`
         self.assertTrue(l.mean < r.mean)
+
+  def test_gamma_update_vs_montecarlo(self):
+    "Test Gamma-only updates via Monte Carlo"
+    initHlMean = 10  # hours
+    initHlBeta = 0.1
+    initHlPrior = (initHlBeta * initHlMean, initHlBeta)
+    a, b = initHlPrior
+
+    t = initHlMean * .5
+    result = 1
+    updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
+    u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, 1, size=1_000_000)
+    print(u2, updated)
+
+    self.assertLess(relativeError(updated.a, u2.a), .01)
+    self.assertLess(relativeError(updated.b, u2.b), .01)
+    self.assertLess(relativeError(updated.mean, u2.mean), .01)
 
   def test_simple(self):
     """Test simple update: boosted"""
