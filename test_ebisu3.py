@@ -88,7 +88,7 @@ def relativeError(actual: float, expected: float) -> float:
 class TestEbisu(unittest.TestCase):
 
   def test_gamma_update_noisy(self):
-    """Test BASIC _gammaUpdateNoisy
+    """Test _gammaUpdateNoisy for various q0 and against Monte Carlo
 
     These are the Ebisu v2-style updates, in that there's no boost, just a prior
     on halflife and either quiz type. These have to be correct for the boost
@@ -100,36 +100,50 @@ class TestEbisu(unittest.TestCase):
 
     a, b = initHlPrior
 
+    MAX_RELERR_AB = .02
+    MAX_RELERR_MEAN = .01
     np.random.seed(seed=233423 + 1)  # for sanity when testing with Monte Carlo
     for fraction in [0.1, 0.5, 1., 2., 10.]:
       t = initHlMean * fraction
-      prev: Optional[ebisu.GammaUpdate] = None
-      for noisy in [0.1, 0.3, 0.7, 0.9]:
-        z = noisy >= 0.5
-        q1 = noisy if z else 1 - noisy
-        q0 = 1 - q1
-        updated = ebisu._gammaUpdateNoisy(a, b, t, q1, q0, z)
+      for q0 in [.15, 0, None]:
+        prev: Optional[ebisu.GammaUpdate] = None
+        for noisy in [0.1, 0.3, 0.7, 0.9]:
+          z = noisy >= 0.5
+          q1 = noisy if z else 1 - noisy
+          q0 = 1 - q1 if q0 is None else q0
+          updated = ebisu._gammaUpdateNoisy(a, b, t, q1, q0, z)
 
-        u2 = _gammaUpdateNoisyMonteCarlo(a, b, t, q1, q0, z, size=500_000)
-        self.assertLess(relativeError(updated.a, u2.a), 0.01)
-        self.assertLess(relativeError(updated.b, u2.b), 0.01)
-        self.assertLess(relativeError(updated.mean, u2.mean), 0.01)
+          for size in [100_000, 500_000, 1_000_000]:
+            u2 = _gammaUpdateNoisyMonteCarlo(a, b, t, q1, q0, z, size=size)
+            if (relativeError(updated.a, u2.a) < MAX_RELERR_AB and
+                relativeError(updated.b, u2.b) < MAX_RELERR_AB and
+                relativeError(updated.mean, u2.mean) < MAX_RELERR_MEAN):
+              # found a size that should match the actual tests below
+              break
 
-        msg = f'q1={q1}, q0={q0}, z={z}, noisy={noisy}, u={updated}'
-        if z:
-          self.assertTrue(updated.mean >= initHlMean, msg)
-        else:
-          self.assertTrue(updated.mean <= initHlMean, msg)
+          self.assertLess(relativeError(updated.a, u2.a), MAX_RELERR_AB)
+          self.assertLess(relativeError(updated.b, u2.b), MAX_RELERR_AB)
+          self.assertLess(relativeError(updated.mean, u2.mean), MAX_RELERR_MEAN)
 
-        if prev:
-          # Noisy updates should be monotonic in `z` (the noisy result)
-          self.assertTrue(prev.mean < updated.mean)
+          msg = f'q0={q0}, z={z}, noisy={noisy}'
+          if z:
+            self.assertGreaterEqual(updated.mean, initHlMean, msg)
+          else:
+            self.assertLessEqual(updated.mean, initHlMean, msg)
 
-        # Means WILL NOT be monotonic in `t`: for `q0 > 0`,
-        # means rise with `t`, then peak, then drop: see
-        # https://github.com/fasiha/ebisu/issues/52
+          if prev:
+            # Noisy updates should be monotonic in `z` (the noisy result)
+            lt = prev.mean <= updated.mean
+            approx = relativeError(prev.mean, updated.mean) < (np.spacing(updated.mean) * 1e3)
+            self.assertTrue(
+                lt or approx,
+                f'{msg}, prev.mean={prev.mean}, updated.mean={updated.mean}, lt={lt}, approx={approx}'
+            )
+          # Means WILL NOT be monotonic in `t`: for `q0 > 0`,
+          # means rise with `t`, then peak, then drop: see
+          # https://github.com/fasiha/ebisu/issues/52
 
-        prev = updated
+          prev = updated
 
   def test_gamma_update_binom(self):
     """Test BASIC _gammaUpdateBinomial"""
@@ -198,9 +212,10 @@ class TestEbisu(unittest.TestCase):
             # to meet the thresholds above.
             for size in [100_000, 500_000, 2_000_000, 5_000_000]:
               u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, n, size=size)
-              relErrs = relativeError(
-                  np.array([updated.a, updated.b, updated.mean]), np.array([u2.a, u2.b, u2.mean]))
-              if np.all(relErrs < np.array([MAX_RELERR_AB, MAX_RELERR_AB, MAX_RELERR_MEAN])):
+
+              if (relativeError(updated.a, u2.a) < MAX_RELERR_AB and
+                  relativeError(updated.b, u2.b) < MAX_RELERR_AB and
+                  relativeError(updated.mean, u2.mean) < MAX_RELERR_MEAN):
                 # found a size that should match the actual tests below
                 break
 
