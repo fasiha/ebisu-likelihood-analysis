@@ -34,6 +34,8 @@ def _gammaUpdateBinomialMonteCarlo(
   postVar = np.sum(weight * (halflife - postMean)**2) / wsum
 
   if False:
+    # This is a fancy mixed type log-moment estimator for fitting Gamma rvs from (weighted) samples.
+    # It's (much) closer to the maximum likelihood fit than the method-of-moments fit we use.
     # See https://en.wikipedia.org/w/index.php?title=Gamma_distribution&oldid=1066334959#Closed-form_estimators
     # However, in Ebisu, we just have central moments of the posterior, not samples, and there doesn't seem to be
     # an easy way to get a closed form "mixed type log-moment estimator" from moments.
@@ -117,15 +119,14 @@ class TestEbisu(unittest.TestCase):
     initHlPrior = (initHlBeta * initHlMean, initHlBeta)
     a, b = initHlPrior
 
-    t = initHlMean * .5
-    result = 1
-    updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
-    u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, 1, size=1_000_000)
-    print(u2, updated)
-
-    self.assertLess(relativeError(updated.a, u2.a), .01)
-    self.assertLess(relativeError(updated.b, u2.b), .01)
-    self.assertLess(relativeError(updated.mean, u2.mean), .01)
+    for fraction in [0.1, 0.5, 1., 2., 10.]:
+      t = initHlMean * fraction
+      for result in [0, 1]:
+        updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
+        u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, 1, size=1_000_000)
+        self.assertLess(relativeError(updated.a, u2.a), .01)
+        self.assertLess(relativeError(updated.b, u2.b), .01)
+        self.assertLess(relativeError(updated.mean, u2.mean), .01)
 
   def test_simple(self):
     """Test simple update: boosted"""
