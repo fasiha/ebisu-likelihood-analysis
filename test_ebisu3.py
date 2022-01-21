@@ -10,6 +10,7 @@ import unittest
 from scipy.stats import gamma as gammarv, binom as binomrv  # type: ignore
 import numpy as np
 from typing import Optional
+import math
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 
@@ -26,13 +27,16 @@ def _gammaUpdateBinomialMonteCarlo(
   halflife = gammarv.rvs(a, scale=1 / b, size=size)
   # pRecall = 2**(-t/halflife)
   pRecall = np.exp(-t / halflife)
-  weight = binomrv.pmf(k, n, pRecall)  # this is the likelihood of observing the data
 
-  wsum = np.sum(weight)
+  logweight = binomrv.logpmf(k, n, pRecall)  # this is the likelihood of observing the data
+  weight = np.exp(logweight)
+  # use logpmf because macOS Scipy `pmf` overflows for pRecall around 2.16337e-319?
+
+  wsum = math.fsum(weight)
   # See https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Mathematical_definition
-  postMean = np.sum(weight * halflife) / wsum
+  postMean = math.fsum(weight * halflife) / wsum
   # See https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Weighted_sample_variance
-  postVar = np.sum(weight * (halflife - postMean)**2) / wsum
+  postVar = math.fsum(weight * (halflife - postMean)**2) / wsum
 
   if False:
     # This is a fancy mixed type log-moment estimator for fitting Gamma rvs from (weighted) samples.
@@ -124,16 +128,22 @@ class TestEbisu(unittest.TestCase):
     initHlPrior = (initHlBeta * initHlMean, initHlBeta)
     a, b = initHlPrior
 
+    np.random.seed(seed=233423 + 1)
+
     for trial in range(1):
       for fraction in [0.1, 0.5, 1., 2., 10.]:
         t = initHlMean * fraction
-        for result in [0, 1]:
-          updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
-          u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, 1, size=2_000_000)
-          # the below thresholds are chosen so over 100 iterations of this unit test, there are no failures
-          self.assertLess(relativeError(updated.a, u2.a), .05, f'trial {trial}')
-          self.assertLess(relativeError(updated.b, u2.b), .05, f'trial {trial}')
-          self.assertLess(relativeError(updated.mean, u2.mean), .01, f'trial {trial}')
+        for n in [1]:
+          for result in range(n + 1):
+            updated = ebisu._gammaUpdateBinomial(a, b, t, result, n)
+            self.assertTrue(
+                np.all(np.isfinite([updated.a, updated.b, updated.mean])), f'k={result}, n={n}')
+            u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, n, size=1_000_000)
+            # the below thresholds are chosen so over several iterations of this unit test at
+            # the same seed, there are no failures
+            self.assertLess(relativeError(updated.a, u2.a), .05, f'trial {trial}')
+            self.assertLess(relativeError(updated.b, u2.b), .05, f'trial {trial}')
+            self.assertLess(relativeError(updated.mean, u2.mean), .01, f'trial {trial}')
 
   def test_simple(self):
     """Test simple update: boosted"""
