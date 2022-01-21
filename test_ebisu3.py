@@ -7,7 +7,7 @@ $ python test_ebisu3.py
 
 import ebisu3 as ebisu
 import unittest
-from scipy.stats import gamma as gammarv, binom as binomrv  # type: ignore
+from scipy.stats import gamma as gammarv, binom as binomrv, bernoulli  # type: ignore
 import numpy as np
 from typing import Optional
 import math
@@ -25,7 +25,7 @@ def _gammaUpdateBinomialMonteCarlo(
 ) -> ebisu.GammaUpdate:
   # Scipy Gamma random variable is inverted: it needs (a, scale=1/b) for the usual (a, b) parameterization
   halflife = gammarv.rvs(a, scale=1 / b, size=size)
-  # pRecall = 2**(-t/halflife)
+  # pRecall = 2**(-t/halflife) FIXME
   pRecall = np.exp(-t / halflife)
 
   logweight = binomrv.logpmf(k, n, pRecall)  # this is the likelihood of observing the data
@@ -54,6 +54,33 @@ def _gammaUpdateBinomialMonteCarlo(
   return ebisu.GammaUpdate(newA, newB, postMean)
 
 
+def _gammaUpdateNoisyMonteCarlo(
+    a: float,
+    b: float,
+    t: float,
+    q1: float,
+    q0: float,
+    z: bool,
+    size=1_000_000,
+) -> ebisu.GammaUpdate:
+  halflife = gammarv.rvs(a, scale=1 / b, size=size)
+  # pRecall = 2**(-t/halflife) FIXME
+  pRecall = np.exp(-t / halflife)
+
+  # this weight is `P(z | pRecall)` and derived and checked via Stan in
+  # https://github.com/fasiha/ebisu/issues/52
+  # Notably, this expression is NOT used by ebisu, so it's a great independent check
+  weight = bernoulli.pmf(z, q1) * pRecall + bernoulli.pmf(z, q0) * (1 - pRecall)
+
+  wsum = math.fsum(weight)
+  # for references to formulas, see `_gammaUpdateBinomialMonteCarlo`
+  postMean = math.fsum(weight * halflife) / wsum
+  postVar = math.fsum(weight * (halflife - postMean)**2) / wsum
+
+  newA, newB = ebisu._meanVarToGamma(postMean, postVar)
+  return ebisu.GammaUpdate(newA, newB, postMean)
+
+
 def relativeError(actual: float, expected: float) -> float:
   return np.abs(actual - expected) / np.abs(expected)
 
@@ -73,6 +100,7 @@ class TestEbisu(unittest.TestCase):
 
     a, b = initHlPrior
 
+    np.random.seed(seed=233423 + 1)  # for sanity when testing with Monte Carlo
     for fraction in [0.1, 0.5, 1., 2., 10.]:
       t = initHlMean * fraction
       prev: Optional[ebisu.GammaUpdate] = None
@@ -81,6 +109,11 @@ class TestEbisu(unittest.TestCase):
         q1 = noisy if z else 1 - noisy
         q0 = 1 - q1
         updated = ebisu._gammaUpdateNoisy(a, b, t, q1, q0, z)
+
+        u2 = _gammaUpdateNoisyMonteCarlo(a, b, t, q1, q0, z, size=500_000)
+        self.assertLess(relativeError(updated.a, u2.a), 0.01)
+        self.assertLess(relativeError(updated.b, u2.b), 0.01)
+        self.assertLess(relativeError(updated.mean, u2.mean), 0.01)
 
         msg = f'q1={q1}, q0={q0}, z={z}, noisy={noisy}, u={updated}'
         if z:
