@@ -92,6 +92,10 @@ class TestEbisu(unittest.TestCase):
           # Noisy updates should be monotonic in `z` (the noisy result)
           self.assertTrue(prev.mean < updated.mean)
 
+        # Means WILL NOT be monotonic in `t`: for `q0 > 0`,
+        # means rise with `t`, then peak, then drop: see
+        # https://github.com/fasiha/ebisu/issues/52
+
         prev = updated
 
   def test_gamma_update_binom(self):
@@ -121,9 +125,6 @@ class TestEbisu(unittest.TestCase):
       curr = us[(tidx, k, n)]
 
       # Binomial updated means should be monotonic in `t`
-      # (This test doesn't make sense for noisy quizzes: for non-zero q0,
-      # we get non-asymptotic results for high `t`: see
-      # https://github.com/fasiha/ebisu/issues/52)
       prev = us.get((tidx - 1, k, n))
       if prev:
         self.assertTrue(prev.mean < curr.mean)
