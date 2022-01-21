@@ -55,7 +55,7 @@ def _gammaUpdateBinomialMonteCarlo(
 
 
 def relativeError(actual: float, expected: float) -> float:
-  return abs(actual - expected) / abs(expected)
+  return np.abs(actual - expected) / np.abs(expected)
 
 
 class TestEbisu(unittest.TestCase):
@@ -128,22 +128,35 @@ class TestEbisu(unittest.TestCase):
     initHlPrior = (initHlBeta * initHlMean, initHlBeta)
     a, b = initHlPrior
 
+    # These thresholds on relative error between the analytical and Monte Carlo updates
+    # should be enough for several trials of this unit test (see `trial` below). Nonetheless
+    # I set the seed to avoid test surprises.
+    MAX_RELERR_AB = .05
+    MAX_RELERR_MEAN = .01
     np.random.seed(seed=233423 + 1)
-
     for trial in range(1):
-      for fraction in [0.1, 0.5, 1., 2., 10.]:
+      for fraction in [0.1, 1., 10.]:
         t = initHlMean * fraction
-        for n in [1]:
-          for result in range(n + 1):
+        for n in [1, 2, 3, 4]:  # total number of binomial attempts
+          for result in range(n + 1):  # number of binomial successes
             updated = ebisu._gammaUpdateBinomial(a, b, t, result, n)
             self.assertTrue(
                 np.all(np.isfinite([updated.a, updated.b, updated.mean])), f'k={result}, n={n}')
-            u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, n, size=1_000_000)
-            # the below thresholds are chosen so over several iterations of this unit test at
-            # the same seed, there are no failures
-            self.assertLess(relativeError(updated.a, u2.a), .05, f'trial {trial}')
-            self.assertLess(relativeError(updated.b, u2.b), .05, f'trial {trial}')
-            self.assertLess(relativeError(updated.mean, u2.mean), .01, f'trial {trial}')
+
+            # in order to avoid egregiously long tests, scale up the number of Monte Carlo samples
+            # to meet the thresholds above.
+            for size in [100_000, 500_000, 2_000_000, 5_000_000]:
+              u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, n, size=size)
+              relErrs = relativeError(
+                  np.array([updated.a, updated.b, updated.mean]), np.array([u2.a, u2.b, u2.mean]))
+              if np.all(relErrs < np.array([MAX_RELERR_AB, MAX_RELERR_AB, MAX_RELERR_MEAN])):
+                # found a size that should match the actual tests below
+                break
+
+            msg = f'{(trial, t, result, n, size)}'
+            self.assertLess(relativeError(updated.a, u2.a), MAX_RELERR_AB, msg)
+            self.assertLess(relativeError(updated.b, u2.b), MAX_RELERR_AB, msg)
+            self.assertLess(relativeError(updated.mean, u2.mean), MAX_RELERR_MEAN, msg)
 
   def test_simple(self):
     """Test simple update: boosted"""

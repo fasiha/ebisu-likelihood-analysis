@@ -188,7 +188,7 @@ def _gammaUpdateBinomial(a: float, b: float, t: float, k: int, n: int) -> GammaU
     loglik = []
     scales = []
     for i in range(0, n - k + 1):
-      loglik.append(_binomln(n, i) + _intGammaPdfExp(a + nth, b, t * (k + i), logDomain=True))
+      loglik.append(_binomln(n - k, i) + _intGammaPdfExp(a + nth, b, t * (k + i), logDomain=True))
       scales.append((-1)**i)
     return logsumexp(loglik, b=scales)
 
