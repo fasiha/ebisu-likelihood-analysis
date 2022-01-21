@@ -9,6 +9,7 @@ import ebisu3 as ebisu
 import unittest
 from scipy.stats import gamma as gammarv, binom as binomrv  # type: ignore
 import numpy as np
+from typing import Optional
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 
@@ -55,8 +56,8 @@ def relativeError(actual: float, expected: float) -> float:
 
 class TestEbisu(unittest.TestCase):
 
-  def test_gamma_update(self):
-    """Test BASIC _gammaUpdateNoisy and _gammaUpdateBinomial
+  def test_gamma_update_noisy(self):
+    """Test BASIC _gammaUpdateNoisy
 
     These are the Ebisu v2-style updates, in that there's no boost, just a prior
     on halflife and either quiz type. These have to be correct for the boost
@@ -68,11 +69,9 @@ class TestEbisu(unittest.TestCase):
 
     a, b = initHlPrior
 
-    noisyTToUpdate: dict[float, list[ebisu.GammaUpdate]] = dict()
-    binomResultToUpdate: dict[int, list[ebisu.GammaUpdate]] = dict()
     for fraction in [0.1, 0.5, 1., 2., 10.]:
       t = initHlMean * fraction
-
+      prev: Optional[ebisu.GammaUpdate] = None
       for noisy in [0.1, 0.3, 0.7, 0.9]:
         z = noisy >= 0.5
         q1 = noisy if z else 1 - noisy
@@ -84,33 +83,39 @@ class TestEbisu(unittest.TestCase):
           self.assertTrue(updated.mean >= initHlMean, msg)
         else:
           self.assertTrue(updated.mean <= initHlMean, msg)
-        sublist = noisyTToUpdate.setdefault(t, [])
-        sublist.append(updated)
 
-      for result in [0, 1]:
+        if prev:
+          # Noisy updates should be monotonic in `z` (the noisy result)
+          self.assertTrue(prev.mean < updated.mean)
+
+        prev = updated
+
+  def test_gamma_update_binom(self):
+    """Test BASIC _gammaUpdateBinomial"""
+    initHlMean = 10  # hours
+    initHlBeta = 0.1
+    initHlPrior = (initHlBeta * initHlMean, initHlBeta)
+
+    a, b = initHlPrior
+
+    for result in [0, 1]:
+      prev: Optional[ebisu.GammaUpdate] = None
+      for fraction in [0.1, 0.5, 1., 2., 10.]:
+        t = initHlMean * fraction
         updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
         if result:
           self.assertTrue(updated.mean >= initHlMean)
         else:
           self.assertTrue(updated.mean <= initHlMean)
-        sublist = binomResultToUpdate.setdefault(result, [])
-        sublist.append(updated)
 
-    # Binomial updates should be monotonic in `t`
-    for quizResult, updatedList in binomResultToUpdate.items():
-      for (l, r) in zip(updatedList, updatedList[1:]):
-        # `l` will be from a shorter quiz delay than `r`
-        self.assertTrue(l.mean < r.mean)
+        if prev:
+          # Binomial updates should be monotonic in `t`
+          self.assertTrue(prev.mean < updated.mean)
+          # this test doesn't make sense for noisy quizzes: for non-zero q0,
+          # we get non-asymptotic results for high `t`: see
+          # https://github.com/fasiha/ebisu/issues/52
 
-    # the above test doesn't make sense for `noisyUpdates`: for non-zero q0,
-    # we get non-asymptotic results for high `t`: see
-    # https://github.com/fasiha/ebisu/issues/52
-
-    # Noisy updates should be monotonic in `z` (the noisy result)
-    for quizTime, updatedList in noisyTToUpdate.items():
-      for (l, r) in zip(updatedList, updatedList[1:]):
-        # `l` will have lower noisy quiz result than `r`
-        self.assertTrue(l.mean < r.mean)
+        prev = updated
 
   def test_gamma_update_vs_montecarlo(self):
     "Test Gamma-only updates via Monte Carlo"
@@ -119,14 +124,16 @@ class TestEbisu(unittest.TestCase):
     initHlPrior = (initHlBeta * initHlMean, initHlBeta)
     a, b = initHlPrior
 
-    for fraction in [0.1, 0.5, 1., 2., 10.]:
-      t = initHlMean * fraction
-      for result in [0, 1]:
-        updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
-        u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, 1, size=1_000_000)
-        self.assertLess(relativeError(updated.a, u2.a), .01)
-        self.assertLess(relativeError(updated.b, u2.b), .01)
-        self.assertLess(relativeError(updated.mean, u2.mean), .01)
+    for trial in range(1):
+      for fraction in [0.1, 0.5, 1., 2., 10.]:
+        t = initHlMean * fraction
+        for result in [0, 1]:
+          updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
+          u2 = _gammaUpdateBinomialMonteCarlo(a, b, t, result, 1, size=2_000_000)
+          # the below thresholds are chosen so over 100 iterations of this unit test, there are no failures
+          self.assertLess(relativeError(updated.a, u2.a), .05, f'trial {trial}')
+          self.assertLess(relativeError(updated.b, u2.b), .05, f'trial {trial}')
+          self.assertLess(relativeError(updated.mean, u2.mean), .01, f'trial {trial}')
 
   def test_simple(self):
     """Test simple update: boosted"""
