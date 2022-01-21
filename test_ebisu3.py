@@ -117,15 +117,26 @@ class TestEbisu(unittest.TestCase):
 
         us[(tidx, result, n)] = updated
 
-    # Binomial updates should be monotonic in `t`
     for tidx, k, n in us:
       curr = us[(tidx, k, n)]
+
+      # Binomial updated means should be monotonic in `t`
+      # (This test doesn't make sense for noisy quizzes: for non-zero q0,
+      # we get non-asymptotic results for high `t`: see
+      # https://github.com/fasiha/ebisu/issues/52)
       prev = us.get((tidx - 1, k, n))
       if prev:
         self.assertTrue(prev.mean < curr.mean)
-    # this test doesn't make sense for noisy quizzes: for non-zero q0,
-    # we get non-asymptotic results for high `t`: see
-    # https://github.com/fasiha/ebisu/issues/52
+
+      # Means should be monotonic in `k`/`result` for fixed `n`
+      prev = us.get((tidx, k - 1, n))
+      if prev:
+        self.assertTrue(prev.mean < curr.mean)
+
+      # And should be monotonic in `n` for fixed `k`/`result`
+      prev = us.get((tidx, k, n - 1))
+      if prev:
+        self.assertTrue(prev.mean < curr.mean)
 
   def test_gamma_update_vs_montecarlo(self):
     "Test Gamma-only updates via Monte Carlo"

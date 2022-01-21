@@ -225,6 +225,7 @@ def simpleUpdateRecall(
 
   else:
     assert successes == np.floor(successes), "float `successes` implies `total==1`"
+    assert total, "non-zero binomial trials"
     k = int(successes)
     n = total
     updated = _gammaUpdateBinomial(a, b, t, k, n)
