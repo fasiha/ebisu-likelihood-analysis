@@ -102,24 +102,30 @@ class TestEbisu(unittest.TestCase):
 
     a, b = initHlPrior
 
-    for result in [0, 1]:
-      prev: Optional[ebisu.GammaUpdate] = None
-      for fraction in [0.1, 0.5, 1., 2., 10.]:
-        t = initHlMean * fraction
-        updated = ebisu._gammaUpdateBinomial(a, b, t, result, 1)
-        if result:
-          self.assertTrue(updated.mean >= initHlMean)
-        else:
-          self.assertTrue(updated.mean <= initHlMean)
+    maxN = 4
+    ts = [fraction * initHlMean for fraction in [0.1, 0.5, 1., 2., 10.]]
+    us: dict[tuple[int, int, int], ebisu.GammaUpdate] = dict()
+    for tidx, t in enumerate(ts):
+      for n in range(1, maxN + 1):
+        for result in range(n + 1):
+          updated = ebisu._gammaUpdateBinomial(a, b, t, result, n)
+          self.assertTrue(np.all(np.isfinite([updated.a, updated.b, updated.mean])))
+          if result == n:
+            self.assertGreaterEqual(updated.mean, initHlMean, (t, result, n))
+          elif result == 0:
+            self.assertLessEqual(updated.mean, initHlMean, (t, result, n))
 
-        if prev:
-          # Binomial updates should be monotonic in `t`
-          self.assertTrue(prev.mean < updated.mean)
-          # this test doesn't make sense for noisy quizzes: for non-zero q0,
-          # we get non-asymptotic results for high `t`: see
-          # https://github.com/fasiha/ebisu/issues/52
+        us[(tidx, result, n)] = updated
 
-        prev = updated
+    # Binomial updates should be monotonic in `t`
+    for tidx, k, n in us:
+      curr = us[(tidx, k, n)]
+      prev = us.get((tidx - 1, k, n))
+      if prev:
+        self.assertTrue(prev.mean < curr.mean)
+    # this test doesn't make sense for noisy quizzes: for non-zero q0,
+    # we get non-asymptotic results for high `t`: see
+    # https://github.com/fasiha/ebisu/issues/52
 
   def test_gamma_update_vs_montecarlo(self):
     "Test Gamma-only updates via Monte Carlo"
@@ -209,4 +215,4 @@ if __name__ == '__main__':
   import os
   # get just this file's module name: no `.py` and no path
   name = os.path.basename(__file__).replace(".py", "")
-  unittest.TextTestRunner().run(unittest.TestLoader().loadTestsFromName(name))
+  unittest.TextTestRunner(failfast=True).run(unittest.TestLoader().loadTestsFromName(name))
