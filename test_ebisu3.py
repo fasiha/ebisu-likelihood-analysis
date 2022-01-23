@@ -249,6 +249,8 @@ class TestEbisu(unittest.TestCase):
         logStrength=0.0,
     )
 
+    left = 0.3
+
     updateds: list[ebisu.Model] = []
     for fraction in [0.1, 0.5, 1.0, 2.0, 10.0]:
       for result in [0, 1]:
@@ -259,13 +261,29 @@ class TestEbisu(unittest.TestCase):
             result,
             total=1,
             now=nowMs + elapsedHours * MILLISECONDS_PER_HOUR,
-            reinforcement=1.0)
+            reinforcement=1.0,
+            left=left,
+        )
 
         msg = f'result={result}, fraction={fraction} => currHl={updated.currentHalflife}'
         if result:
           self.assertTrue(updated.currentHalflife >= initHlMean, msg)
         else:
           self.assertTrue(updated.currentHalflife <= initHlMean, msg)
+
+        # this is the unboosted posterior update
+        u2 = ebisu._gammaUpdateBinomial(initHlPrior[0], initHlPrior[1], elapsedHours, result, 1)
+        self.assertAlmostEqual(updated.initHalflifePrior[0], u2.a)
+        self.assertAlmostEqual(updated.initHalflifePrior[1], u2.b)
+
+        # this uses the two-point formula: y=(y2-y1)/(x2-x1)*(x-x1) + y1, where
+        # y represents the boost fraction and x represents the time elapsed as
+        # a fraction of the initial halflife
+        boostFraction = (boostMean - 1) / (1 - left) * (fraction - left) + 1
+
+        # clamp 1 <= boost <= boostMean, and only boost successes
+        boost = min(boostMean, max(1, boostFraction)) if result else 1
+        self.assertAlmostEqual(updated.currentHalflife, boost * u2.mean)
 
         updateds.append(updated)
     # print(updateds)

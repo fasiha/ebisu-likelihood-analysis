@@ -234,11 +234,12 @@ def simpleUpdateRecall(
   mean, newAlpha, newBeta = (updated.mean, updated.a, updated.b)
 
   ret = replace(model)  # clone
-  ret.initHalflifePrior = (newAlpha, newBeta / totalBoost)
+  ret.initHalflifePrior = (newAlpha, newBeta * totalBoost)
   _appendQuiz(ret, elapsed, resultObj, reinforcement)
   boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
   if success(resultObj):
-    boostedHl = mean * _clampLerp2(left * mean, right * mean, min(boostMean, 1.0), boostMean, t)
+    boostedHl = mean * _clampLerp2(left * model.currentHalflife, right * model.currentHalflife,
+                                   min(boostMean, 1.0), boostMean, t)
   else:
     boostedHl = mean
   if reinforcement > 0:
@@ -357,7 +358,8 @@ def fullUpdateRecall(
     left=0.3,
     right=1.0,
 ) -> Model:
-  if len(model.elapseds[-1]) == 0 or len(model.elapseds[-1]) < 2:
+  if len(model.elapseds[-1]) < 2:
+    # simpleUpdateRecall will append the quiz for us
     return simpleUpdateRecall(
         model, elapsed, successes, total=total, now=now, q0=q0, reinforcement=reinforcement)
   ret = replace(model)
