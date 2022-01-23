@@ -251,7 +251,6 @@ class TestEbisu(unittest.TestCase):
 
     left = 0.3
 
-    updateds: list[ebisu.Model] = []
     for fraction in [0.1, 0.5, 1.0, 2.0, 10.0]:
       for result in [0, 1]:
         elapsedHours = fraction * initHlMean
@@ -273,8 +272,6 @@ class TestEbisu(unittest.TestCase):
 
         # this is the unboosted posterior update
         u2 = ebisu._gammaUpdateBinomial(initHlPrior[0], initHlPrior[1], elapsedHours, result, 1)
-        self.assertAlmostEqual(updated.initHalflifePrior[0], u2.a)
-        self.assertAlmostEqual(updated.initHalflifePrior[1], u2.b)
 
         # this uses the two-point formula: y=(y2-y1)/(x2-x1)*(x-x1) + y1, where
         # y represents the boost fraction and x represents the time elapsed as
@@ -285,8 +282,37 @@ class TestEbisu(unittest.TestCase):
         boost = min(boostMean, max(1, boostFraction)) if result else 1
         self.assertAlmostEqual(updated.currentHalflife, boost * u2.mean)
 
-        updateds.append(updated)
-    # print(updateds)
+        for _ in range(3):
+          nextElapsed, boost, nextResult = updated.currentHalflife, boostMean, 1
+          nextUpdate = ebisu.simpleUpdateRecall(
+              updated,
+              nextElapsed,
+              nextResult,
+              now=nowMs + (elapsedHours + nextElapsed) * MILLISECONDS_PER_HOUR,
+              left=left,
+          )
+
+          initMean = lambda model: ebisu._gammaToMean(*model.initHalflifePrior)
+          self.assertGreater(initMean(nextUpdate), 1.05 * initMean(updated))
+
+          # this checks the scaling applied to take the new Gamma to the initial Gamma in simpleUpdateRecall
+          self.assertGreater(nextUpdate.currentHalflife, 1.1 * initMean(nextUpdate))
+
+          # meanwhile this checks the scaling to convert the initial halflife Gamma and the current halflife mean
+          currHlPrior, _ = ebisu._currentHalflifePrior(updated)
+          self.assertAlmostEqual(updated.currentHalflife,
+                                 gammarv.mean(currHlPrior[0], scale=1 / currHlPrior[1]))
+
+          # this is an almost tautological test but just as a sanity check, confirm that boosts are being applied?
+          next2 = ebisu._gammaUpdateBinomial(currHlPrior[0], currHlPrior[1], nextElapsed,
+                                             nextResult, 1)
+          self.assertAlmostEqual(nextUpdate.currentHalflife, next2.mean * boost)
+
+          updated = nextUpdate
+
+          # don't bother to check alpha/beta: a test in Python will just be tautological
+          # (we'll repeat the same thing in the test as in the code). That has to happen
+          # via Stan?
 
 
 if __name__ == '__main__':
