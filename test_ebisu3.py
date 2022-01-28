@@ -282,7 +282,7 @@ class TestEbisu(unittest.TestCase):
         boost = min(boostMean, max(1, boostFraction)) if result else 1
         self.assertAlmostEqual(updated.currentHalflife, boost * u2.mean)
 
-        for nextResult in [1]:
+        for nextResult in [1, 0]:
           for _ in range(3):
             nextElapsed, boost = updated.currentHalflife, boostMean
             nextUpdate = ebisu.simpleUpdateRecall(
@@ -294,7 +294,12 @@ class TestEbisu(unittest.TestCase):
             )
 
             initMean = lambda model: ebisu._gammaToMean(*model.initHalflifePrior)
-            self.assertGreater(initMean(nextUpdate), 1.05 * initMean(updated))
+
+            # confirm the initial halflife estimate rose/dropped
+            if nextResult:
+              self.assertGreater(initMean(nextUpdate), 1.05 * initMean(updated))
+            else:
+              self.assertLess(initMean(nextUpdate), 1.05 * initMean(updated))
 
             # this checks the scaling applied to take the new Gamma to the initial Gamma in simpleUpdateRecall
             self.assertGreater(nextUpdate.currentHalflife, 1.1 * initMean(nextUpdate))
@@ -304,10 +309,12 @@ class TestEbisu(unittest.TestCase):
             self.assertAlmostEqual(updated.currentHalflife,
                                    gammarv.mean(currHlPrior[0], scale=1 / currHlPrior[1]))
 
-            # this is an almost tautological test but just as a sanity check, confirm that boosts are being applied?
-            next2 = ebisu._gammaUpdateBinomial(currHlPrior[0], currHlPrior[1], nextElapsed,
-                                               nextResult, 1)
-            self.assertAlmostEqual(nextUpdate.currentHalflife, next2.mean * boost)
+            if nextResult:
+              # this is an almost tautological test but just as a sanity check, confirm that boosts are being applied?
+              next2 = ebisu._gammaUpdateBinomial(currHlPrior[0], currHlPrior[1], nextElapsed,
+                                                 nextResult, 1)
+              self.assertAlmostEqual(nextUpdate.currentHalflife, next2.mean * boost)
+              # don't test this for failures: no boost is applied then
 
             updated = nextUpdate
 
