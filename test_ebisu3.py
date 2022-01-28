@@ -282,37 +282,38 @@ class TestEbisu(unittest.TestCase):
         boost = min(boostMean, max(1, boostFraction)) if result else 1
         self.assertAlmostEqual(updated.currentHalflife, boost * u2.mean)
 
-        for _ in range(3):
-          nextElapsed, boost, nextResult = updated.currentHalflife, boostMean, 1
-          nextUpdate = ebisu.simpleUpdateRecall(
-              updated,
-              nextElapsed,
-              nextResult,
-              now=nowMs + (elapsedHours + nextElapsed) * MILLISECONDS_PER_HOUR,
-              left=left,
-          )
+        for nextResult in [1]:
+          for _ in range(3):
+            nextElapsed, boost = updated.currentHalflife, boostMean
+            nextUpdate = ebisu.simpleUpdateRecall(
+                updated,
+                nextElapsed,
+                nextResult,
+                now=nowMs + (elapsedHours + nextElapsed) * MILLISECONDS_PER_HOUR,
+                left=left,
+            )
 
-          initMean = lambda model: ebisu._gammaToMean(*model.initHalflifePrior)
-          self.assertGreater(initMean(nextUpdate), 1.05 * initMean(updated))
+            initMean = lambda model: ebisu._gammaToMean(*model.initHalflifePrior)
+            self.assertGreater(initMean(nextUpdate), 1.05 * initMean(updated))
 
-          # this checks the scaling applied to take the new Gamma to the initial Gamma in simpleUpdateRecall
-          self.assertGreater(nextUpdate.currentHalflife, 1.1 * initMean(nextUpdate))
+            # this checks the scaling applied to take the new Gamma to the initial Gamma in simpleUpdateRecall
+            self.assertGreater(nextUpdate.currentHalflife, 1.1 * initMean(nextUpdate))
 
-          # meanwhile this checks the scaling to convert the initial halflife Gamma and the current halflife mean
-          currHlPrior, _ = ebisu._currentHalflifePrior(updated)
-          self.assertAlmostEqual(updated.currentHalflife,
-                                 gammarv.mean(currHlPrior[0], scale=1 / currHlPrior[1]))
+            # meanwhile this checks the scaling to convert the initial halflife Gamma and the current halflife mean
+            currHlPrior, _ = ebisu._currentHalflifePrior(updated)
+            self.assertAlmostEqual(updated.currentHalflife,
+                                   gammarv.mean(currHlPrior[0], scale=1 / currHlPrior[1]))
 
-          # this is an almost tautological test but just as a sanity check, confirm that boosts are being applied?
-          next2 = ebisu._gammaUpdateBinomial(currHlPrior[0], currHlPrior[1], nextElapsed,
-                                             nextResult, 1)
-          self.assertAlmostEqual(nextUpdate.currentHalflife, next2.mean * boost)
+            # this is an almost tautological test but just as a sanity check, confirm that boosts are being applied?
+            next2 = ebisu._gammaUpdateBinomial(currHlPrior[0], currHlPrior[1], nextElapsed,
+                                               nextResult, 1)
+            self.assertAlmostEqual(nextUpdate.currentHalflife, next2.mean * boost)
 
-          updated = nextUpdate
+            updated = nextUpdate
 
-          # don't bother to check alpha/beta: a test in Python will just be tautological
-          # (we'll repeat the same thing in the test as in the code). That has to happen
-          # via Stan?
+            # don't bother to check alpha/beta: a test in Python will just be tautological
+            # (we'll repeat the same thing in the test as in the code). That has to happen
+            # via Stan?
 
 
 if __name__ == '__main__':
