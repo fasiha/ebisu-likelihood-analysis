@@ -8,11 +8,85 @@ $ python test_ebisu3.py
 import ebisu3 as ebisu
 import unittest
 from scipy.stats import gamma as gammarv, binom as binomrv, bernoulli  # type: ignore
+from scipy.special import logsumexp  # type: ignore
 import numpy as np
-from typing import Optional
+from typing import Optional, Union
 import math
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
+
+
+def fullBinomialMonteCarlo(
+    hlPrior: tuple[float, float],
+    bPrior: tuple[float, float],
+    ts: list[float],
+    ks: list[int],
+    ns: list[int],
+    left=0.3,
+    size=1_000_000,
+):
+  hl0s = gammarv.rvs(hlPrior[0], scale=1 / hlPrior[1], size=size)
+  boosts = gammarv.rvs(bPrior[0], scale=1 / bPrior[1], size=size)
+
+  logweights = np.zeros(size)
+
+  hls = hl0s.copy()
+  for t, k, n in zip(ts, ks, ns):
+    logps = -t / hls * np.log(2)
+    if k == n:  # success
+      logweights += logps
+    else:
+      logweights += np.log(-np.expm1(logps))
+    # This is the likelihood of observing the data, and is more accurate than
+    # `binomrv.logpmf(k, n, pRecall)` since `pRecall` is already in log domain
+
+    # Apply boost for successful quizzes
+    if ebisu.success(ebisu.BinomialResult(k, n)):  # reuse same rule as ebisu
+      hls *= clampLerp(left * hls, hls, np.minimum(boosts, 1.0), boosts, t)
+
+  kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights))
+  posteriorBoost = weightedMeanLogw(logweights, boosts)
+  posteriorInitHl = weightedMeanLogw(logweights, hl0s)
+  posteriorCurrHl = weightedMeanLogw(logweights, hls)
+
+  w = np.exp(logweights)
+  estb = ebisu._gammaToMean(*weightedGammaEstimate(boosts, w))
+  esthl0 = ebisu._gammaToMean(*weightedGammaEstimate(hl0s, w))
+  esthl = ebisu._gammaToMean(*weightedGammaEstimate(hls, w))
+  return dict(
+      kishEffectiveSampleSize=kishEffectiveSampleSize,
+      posteriorBoost=posteriorBoost,
+      posteriorInitHl=posteriorInitHl,
+      posteriorCurrHl=posteriorCurrHl,
+      estb=estb,
+      esthl0=esthl0,
+      esthl=esthl,
+  )
+
+
+def weightedGammaEstimate(h, w):
+  wsum = math.fsum(w)
+  that2 = np.sum(w * h * np.log(h)) / wsum - np.sum(w * h) / wsum * np.sum(w * np.log(h)) / wsum
+  khat2 = np.sum(w * h) / wsum / that2
+  fit = (khat2, 1 / that2)
+  return fit
+
+
+def clampLerp(x1: np.ndarray, x2: np.ndarray, y1: np.ndarray, y2: np.ndarray, x: float):
+  # Asssuming x1 <= x <= x2, map x from [x0, x1] to [0, 1]
+  mu: Union[float, np.ndarray] = (x - x1) / (x2 - x1)  # will be >=0 and <=1
+  ret = np.empty_like(y2)
+  idx = x < x1
+  ret[idx] = y1[idx]
+  idx = x > x2
+  ret[idx] = y2[idx]
+  idx = np.logical_and(x1 <= x, x <= x2)
+  ret[idx] = (y1 * (1 - mu) + y2 * mu)[idx]
+  return ret
+
+
+def weightedMeanLogw(logw: np.ndarray, x: np.ndarray) -> np.ndarray:
+  return np.exp(logsumexp(logw, b=x) - logsumexp(logw))
 
 
 def _gammaUpdateBinomialMonteCarlo(
@@ -225,7 +299,7 @@ class TestEbisu(unittest.TestCase):
             self.assertLess(relativeError(updated.mean, u2.mean), MAX_RELERR_MEAN, msg)
 
   def test_simple(self):
-    """Test simple update: boosted"""
+    """Test simple binomial update: boosted"""
     initHlMean = 10  # hours
     initHlBeta = 0.1
     initHlPrior = (initHlBeta * initHlMean, initHlBeta)
@@ -283,13 +357,13 @@ class TestEbisu(unittest.TestCase):
         self.assertAlmostEqual(updated.currentHalflife, boost * u2.mean)
 
         for nextResult in [1, 0]:
-          for _ in range(3):
+          for i in range(3):
             nextElapsed, boost = updated.currentHalflife, boostMean
             nextUpdate = ebisu.simpleUpdateRecall(
                 updated,
                 nextElapsed,
                 nextResult,
-                now=nowMs + (elapsedHours + nextElapsed) * MILLISECONDS_PER_HOUR,
+                now=nowMs + (elapsedHours + (i + 1) * nextElapsed) * MILLISECONDS_PER_HOUR,
                 left=left,
             )
 
@@ -322,9 +396,111 @@ class TestEbisu(unittest.TestCase):
             # (we'll repeat the same thing in the test as in the code). That has to happen
             # via Stan?
 
+  def test_full(self):
+    initHlMean = 10  # hours
+    initHlBeta = 0.1
+    initHlPrior = (initHlBeta * initHlMean, initHlBeta)
+
+    boostMean = 1.5
+    boostBeta = 3.0
+    boostPrior = (boostBeta * boostMean, boostBeta)
+
+    nowMs = ebisu._timeMs()
+
+    currentHalflife = initHlMean
+
+    init = ebisu.Model(
+        elapseds=[],
+        results=[],
+        startStrengths=[],
+        initHalflifePrior=initHlPrior,
+        boostPrior=boostPrior,
+        startTime=nowMs,
+        currentHalflife=currentHalflife,
+        logStrength=0.0,
+    )
+
+    left = 0.3
+    ts: list[float] = []
+    ks: list[int] = []
+    ns: list[int] = []
+    for fraction in [0.1, 2.0]:
+      for result in [1, 0]:
+        elapsedHours = fraction * initHlMean
+
+        ts.append(elapsedHours)
+        ks.append(result)
+        ns.append(1)
+        # print(f'  len={len(list(flatten(init.results)))}')
+
+        full = ebisu.fullUpdateRecall(init, elapsedHours, result, left=left)
+        simp = ebisu.simpleUpdateRecall(init, elapsedHours, result, left=left)
+        # full will be the same as simple because this is the first quiz
+        self.assertEqual(full.currentHalflife, simp.currentHalflife)
+
+        for nextResult in [1]:
+          for i in range(3):
+            nextElapsed = full.currentHalflife
+
+            ts.append(nextElapsed)
+            ks.append(1)
+            ns.append(1)
+
+            nextFull = ebisu.fullUpdateRecall(full, nextElapsed, nextResult, left=left)
+            full = nextFull
+
+          d = {
+              'boostMean': ebisu._gammaToMean(*full.boostPrior),
+              'initHlMean': ebisu._gammaToMean(*full.initHalflifePrior),
+              'currHlMean': full.currentHalflife
+          }
+          # print('===')
+          # continue
+
+          import mpmath as mp
+          f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), full, 0.3, 1.0))
+          den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
+          fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), full, 0.3, 1.0))
+          numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
+          fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), full, 0.3, 1.0))
+          numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
+          print([numb, numh, den])
+          print([numb / den, numh / den])
+
+          print(f'full={d}')
+          mc = fullBinomialMonteCarlo(
+              full.initHalflifePrior, full.boostPrior, ts, ks, ns, size=10_000_000)
+          print(f'{mc=}')
+          """
+          We see that solo Ebisu, Monte Carlo, and quadrature all agree on marginal posterior means of boost and init HL.
+          But joint Ebisu does not.
+          At least for this simple case.
+          """
+          print('===')
+
+
+def flatten(list_of_lists):
+  "Flatten one level of nesting"
+  from itertools import chain
+  return chain.from_iterable(list_of_lists)
+
+
+def printModel(nextFull: ebisu.Model, nextSimple: ebisu.Model):
+  v = [
+      nextFull.currentHalflife / nextSimple.currentHalflife,
+      ebisu._gammaToMean(*nextFull.boostPrior),
+      ebisu._gammaToMean(*nextFull.initHalflifePrior),
+      ebisu._gammaToMean(*nextSimple.initHalflifePrior)
+  ]
+  print(
+      f'curr hl ratio={v[0]:0.3f}={nextFull.currentHalflife:0.3f}/{nextSimple.currentHalflife:.03f}, full mean hl0,boost={v[2]:0.3f},{v[1]:0.3f}, simp mean hl0={v[3]:0.3f}'
+  )
+
 
 if __name__ == '__main__':
+  t = TestEbisu()
+  t.test_full()
   import os
   # get just this file's module name: no `.py` and no path
   name = os.path.basename(__file__).replace(".py", "")
-  unittest.TextTestRunner(failfast=True).run(unittest.TestLoader().loadTestsFromName(name))
+  # unittest.TextTestRunner(failfast=True).run(unittest.TestLoader().loadTestsFromName(name))

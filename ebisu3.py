@@ -330,10 +330,13 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float):
 def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
                          y: Union[list[float], np.ndarray],
                          logPosterior: Union[list[float], np.ndarray],
-                         weightPower=1.0) -> dict:  # wls 4d
+                         weightPower=1.0) -> dict:
+  # four-dimensional weighted least squares
   x = np.array(x)
   y = np.array(y)
   logPosterior = np.array(logPosterior)
+  assert x.size == y.size
+  assert x.size == logPosterior.size
 
   A = np.vstack([np.log(x), -x, np.log(y), -y, np.ones_like(x)]).T
   weights = np.diag(np.exp(logPosterior - np.max(logPosterior))**weightPower)
@@ -343,8 +346,23 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
   betax = t[1]
   alphay = t[2] + 1
   betay = t[3]
+  if True:
+    Ax = A[:, [0, 1, -1]]
+    Ay = A[:, 2:]
+    tX = lstsq(np.dot(weights, Ax), np.dot(weights, logPosterior))[0]
+    tY = lstsq(np.dot(weights, Ay), np.dot(weights, logPosterior))[0]
+    solo = dict(alphaX=tX[0] + 1, betaX=tX[1], alphaY=tY[0] + 1, betaY=tY[1])
+    solo['meanX'] = _gammaToMean(solo['alphaX'], solo['betaX'])
+    solo['meanY'] = _gammaToMean(solo['alphaY'], solo['betaY'])
+
   assert all(x > 0 for x in [alphax, betax, alphay, betay]), 'positive gamma parameters'
-  return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
+  return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay, solo=solo)
+
+
+def flatten(list_of_lists):
+  "Flatten one level of nesting"
+  from itertools import chain
+  return chain.from_iterable(list_of_lists)
 
 
 def fullUpdateRecall(
@@ -358,10 +376,20 @@ def fullUpdateRecall(
     left=0.3,
     right=1.0,
 ) -> Model:
-  if len(model.elapseds[-1]) < 2:
+  # print(f'len={len(list(flatten(model.results)))}')
+  if len(model.elapseds) == 0 or len(model.elapseds[-1]) < 2:
     # simpleUpdateRecall will append the quiz for us
     return simpleUpdateRecall(
-        model, elapsed, successes, total=total, now=now, q0=q0, reinforcement=reinforcement)
+        model,
+        elapsed,
+        successes,
+        total=total,
+        now=now,
+        q0=q0,
+        reinforcement=reinforcement,
+        left=left,
+        right=right,
+    )
   ret = replace(model)
   # ensure we add THIS quiz
   res: Result
@@ -394,7 +422,8 @@ def fullUpdateRecall(
     posteriors.append(posterior2d(bestb, h))
     bs.append(bestb)
     hs.append(h)
-  fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=3.0)
+  fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
+  print('solo', fit['solo'])
 
   # update prior(s)
   ret.boostPrior = (fit['alphax'], fit['betax'])
