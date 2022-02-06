@@ -12,6 +12,7 @@ from scipy.special import logsumexp  # type: ignore
 import numpy as np
 from typing import Optional, Union
 import math
+from dataclasses import dataclass, replace
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 
@@ -420,35 +421,20 @@ class TestEbisu(unittest.TestCase):
         logStrength=0.0,
     )
 
+    upd = replace(init)
+
     left = 0.3
-    ts: list[float] = []
-    ks: list[int] = []
-    ns: list[int] = []
-    for fraction in [0.1, 2.0]:
-      for result in [1, 0]:
+    for fraction in [0.1]:
+      for result in [1]:
         elapsedHours = fraction * initHlMean
-
-        ts.append(elapsedHours)
-        ks.append(result)
-        ns.append(1)
-        # print(f'  len={len(list(flatten(init.results)))}')
-
-        full = ebisu.fullUpdateRecall(init, elapsedHours, result, left=left)
-        simp = ebisu.simpleUpdateRecall(init, elapsedHours, result, left=left)
-        # full will be the same as simple because this is the first quiz
-        self.assertEqual(full.currentHalflife, simp.currentHalflife)
+        ebisu._appendQuiz(upd, elapsedHours, ebisu.BinomialResult(result, 1), 1.0)
 
         for nextResult in [1]:
           for i in range(3):
-            nextElapsed = full.currentHalflife
+            nextElapsed = elapsedHours * (i + 1)
+            ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
 
-            ts.append(nextElapsed)
-            ks.append(1)
-            ns.append(1)
-
-            nextFull = ebisu.fullUpdateRecall(full, nextElapsed, nextResult, left=left)
-            full = nextFull
-
+          full = ebisu.fullUpdateRecall(upd, elapsedHours, result, left=left)
           d = {
               'boostMean': ebisu._gammaToMean(*full.boostPrior),
               'initHlMean': ebisu._gammaToMean(*full.initHalflifePrior),
@@ -457,23 +443,26 @@ class TestEbisu(unittest.TestCase):
           # print('===')
           # continue
 
-          import mpmath as mp
-          f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), full, 0.3, 1.0))
+          import mpmath as mp  # type:ignore
+          f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
           den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
-          fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), full, 0.3, 1.0))
+          fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
           numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
-          fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), full, 0.3, 1.0))
+          fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
           numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
           print([numb, numh, den])
           print([numb / den, numh / den])
 
           print(f'full={d}')
           mc = fullBinomialMonteCarlo(
-              full.initHalflifePrior, full.boostPrior, ts, ks, ns, size=10_000_000)
+              init.initHalflifePrior,
+              init.boostPrior, [t for t in upd.elapseds[-1]],
+              [r.successes for r in upd.results[-1]], [1 for t in upd.elapseds[-1]],
+              size=10_000_000)
           print(f'{mc=}')
           """
-          We see that solo Ebisu, Monte Carlo, and quadrature all agree on marginal posterior means of boost and init HL.
-          But joint Ebisu does not.
+          We see that Monte Carlo and quadrature agree on marginal posterior means of boost and init HL.
+          But joint/solo Ebisu does not.
           At least for this simple case.
           """
           print('===')
