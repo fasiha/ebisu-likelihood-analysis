@@ -346,17 +346,9 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
   betax = t[1]
   alphay = t[2] + 1
   betay = t[3]
-  if True:
-    Ax = A[:, [0, 1, -1]]
-    Ay = A[:, 2:]
-    tX = lstsq(np.dot(weights, Ax), np.dot(weights, logPosterior))[0]
-    tY = lstsq(np.dot(weights, Ay), np.dot(weights, logPosterior))[0]
-    solo = dict(alphaX=tX[0] + 1, betaX=tX[1], alphaY=tY[0] + 1, betaY=tY[1])
-    solo['meanX'] = _gammaToMean(solo['alphaX'], solo['betaX'])
-    solo['meanY'] = _gammaToMean(solo['alphaY'], solo['betaY'])
 
   assert all(x > 0 for x in [alphax, betax, alphay, betay]), 'positive gamma parameters'
-  return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay, solo=solo)
+  return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
 
 
 def flatten(list_of_lists):
@@ -367,39 +359,14 @@ def flatten(list_of_lists):
 
 def fullUpdateRecall(
     model: Model,
-    elapsed: float,
-    successes: Union[float, int],
-    total: int = 1,
     now: Union[None, float] = None,
     q0: Union[None, float] = None,
     reinforcement: float = 1.0,
     left=0.3,
     right=1.0,
 ) -> Model:
-  # print(f'len={len(list(flatten(model.results)))}')
-  if len(model.elapseds) == 0 or len(model.elapseds[-1]) < 2:
-    # simpleUpdateRecall will append the quiz for us
-    return simpleUpdateRecall(
-        model,
-        elapsed,
-        successes,
-        total=total,
-        now=now,
-        q0=q0,
-        reinforcement=reinforcement,
-        left=left,
-        right=right,
-    )
   ret = replace(model)
-  # ensure we add THIS quiz
-  res: Result
-  if total == 1 and 0 < successes < 1:
-    q1 = max(successes, 1 - successes)
-    res = NoisyBinaryResult(result=successes, q1=q1, q0=1 - q1 if q0 is None else q0)
-  else:
-    assert successes == np.floor(successes), "float `successes` implies `total==1`"
-    res = BinomialResult(successes=int(successes), total=total)
-  _appendQuiz(ret, elapsed, res, reinforcement)
+  # assume this is done outside # _appendQuiz(ret, elapsed, res, reinforcement)
 
   posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
 
@@ -423,7 +390,6 @@ def fullUpdateRecall(
     bs.append(bestb)
     hs.append(h)
   fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
-  print('solo', fit['solo'])
 
   # update prior(s)
   ret.boostPrior = (fit['alphax'], fit['betax'])

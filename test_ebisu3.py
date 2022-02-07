@@ -48,20 +48,20 @@ def fullBinomialMonteCarlo(
   kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights))
   posteriorBoost = weightedMeanLogw(logweights, boosts)
   posteriorInitHl = weightedMeanLogw(logweights, hl0s)
-  posteriorCurrHl = weightedMeanLogw(logweights, hls)
-
-  w = np.exp(logweights)
-  estb = ebisu._gammaToMean(*weightedGammaEstimate(boosts, w))
-  esthl0 = ebisu._gammaToMean(*weightedGammaEstimate(hl0s, w))
-  esthl = ebisu._gammaToMean(*weightedGammaEstimate(hls, w))
+  # posteriorCurrHl = weightedMeanLogw(logweights, hls)
+  # w = np.exp(logweights)
+  # sisHl0s = sequentialImportanceResample(hl0s, w)[0]
+  # estb = ebisu._gammaToMean(*weightedGammaEstimate(boosts, w))
+  # esthl0 = ebisu._gammaToMean(*weightedGammaEstimate(hl0s, w))
+  # esthl = ebisu._gammaToMean(*weightedGammaEstimate(hls, w))
   return dict(
       kishEffectiveSampleSize=kishEffectiveSampleSize,
       posteriorBoost=posteriorBoost,
       posteriorInitHl=posteriorInitHl,
-      posteriorCurrHl=posteriorCurrHl,
-      estb=estb,
-      esthl0=esthl0,
-      esthl=esthl,
+      # posteriorCurrHl=posteriorCurrHl,
+      # estb=estb,
+      # esthl0=esthl0,
+      # esthl=esthl,
   )
 
 
@@ -424,48 +424,144 @@ class TestEbisu(unittest.TestCase):
     upd = replace(init)
 
     left = 0.3
-    for fraction in [0.1]:
-      for result in [1]:
+    for fraction in [1.5]:
+      for result in [0]:
         elapsedHours = fraction * initHlMean
         ebisu._appendQuiz(upd, elapsedHours, ebisu.BinomialResult(result, 1), 1.0)
 
-        for nextResult in [1]:
-          for i in range(3):
-            nextElapsed = elapsedHours * (i + 1)
-            ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
+        for nextResult, nextElapsed in zip([1, 1, 1],
+                                           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
+          ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
 
-          full = ebisu.fullUpdateRecall(upd, elapsedHours, result, left=left)
-          d = {
-              'boostMean': ebisu._gammaToMean(*full.boostPrior),
-              'initHlMean': ebisu._gammaToMean(*full.initHalflifePrior),
-              'currHlMean': full.currentHalflife
-          }
-          # print('===')
-          # continue
+        # return upd
+        full = ebisu.fullUpdateRecall(upd, left=left)
+        d = {
+            'boostMean': ebisu._gammaToMean(*full.boostPrior),
+            'initHlMean': ebisu._gammaToMean(*full.initHalflifePrior),
+        }
+        print(f'full={d}')
+        # print('===')
+        # continue
 
-          import mpmath as mp  # type:ignore
-          f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
-          den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
-          fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
-          numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
-          fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
-          numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
-          print([numb, numh, den])
-          print([numb / den, numh / den])
+        import mpmath as mp  # type:ignore
+        f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
+        fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
+        fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
+        print([numb, numh, den])
+        print([numb / den, numh / den])
+        return upd
 
-          print(f'full={d}')
-          mc = fullBinomialMonteCarlo(
-              init.initHalflifePrior,
-              init.boostPrior, [t for t in upd.elapseds[-1]],
-              [r.successes for r in upd.results[-1]], [1 for t in upd.elapseds[-1]],
-              size=10_000_000)
-          print(f'{mc=}')
-          """
-          We see that Monte Carlo and quadrature agree on marginal posterior means of boost and init HL.
-          But joint/solo Ebisu does not.
-          At least for this simple case.
-          """
-          print('===')
+        mc = fullBinomialMonteCarlo(
+            init.initHalflifePrior,
+            init.boostPrior, [t for t in upd.elapseds[-1]], [r.successes for r in upd.results[-1]],
+            [1 for t in upd.elapseds[-1]],
+            size=10_000_000)
+        print(f'{mc=}')
+        """
+        We see that Monte Carlo and quadrature agree on marginal posterior means of boost and init HL.
+        But joint/solo Ebisu does not.
+        At least for this simple case.
+        """
+        print('===')
+        return upd
+
+
+def vizPosterior(ret: ebisu.Model, left=0.3, right=1.0, fit2total=202, weightPower=0.0):
+  MIN_BOOST = 1.0
+  ab, bb = ret.boostPrior
+  ah, bh = ret.initHalflifePrior
+  midBoost, maxBoost = gammarv.ppf([0.7, 0.99], ab, scale=1.0 / bb)
+  minHalflife, midHalflife, maxHalflife = gammarv.ppf([0.01, 0.7, 0.99], ah, scale=1.0 / bh)
+  bvec = np.linspace(MIN_BOOST, maxBoost, 101)
+  hvec = np.linspace(minHalflife, maxHalflife, 101)
+  bmat, hmat = np.meshgrid(bvec, hvec)
+
+  posterior2d = lambda b, h: ebisu._posterior(b, h, ret, left, right)
+
+  z = np.vectorize(posterior2d)(bmat, hmat)
+  opt = shgo(lambda x: -posterior2d(x[0], x[1]), [(MIN_BOOST, maxBoost),
+                                                  (minHalflife, maxHalflife)])
+  bestb, besth = opt.x
+
+  peak = np.max(z)
+  cutoff = peak - 10
+  idx = z.ravel() > cutoff
+  fitall = ebisu._fitJointToTwoGammas(
+      bmat.ravel()[idx], hmat.ravel()[idx], z.ravel()[idx], weightPower=1.0)
+  print(f'size={bmat.ravel()[idx].size}')
+  fitall['meanX'] = ebisu._gammaToMean(fitall['alphax'], fitall['betax'])
+  fitall['meanY'] = ebisu._gammaToMean(fitall['alphay'], fitall['betay'])
+
+  def mkfit(maxBoost, maxHalflife, nb=201, nh=201, weightPower=0.0):
+    bs = []
+    hs = []
+    posteriors = []
+    bvec = np.linspace(MIN_BOOST, maxBoost, nb)
+    for b in bvec:
+      posteriors.append(posterior2d(b, besth))
+      bs.append(b)
+      hs.append(besth)
+    hvec = np.linspace(minHalflife, maxHalflife, nh)
+    for h in hvec:
+      posteriors.append(posterior2d(bestb, h))
+      bs.append(bestb)
+      hs.append(h)
+
+    # fig, ax = plt.subplots(2, 1)
+    # ax[0].plot(bvec, posteriors[:len(bvec)])
+    # ax[1].plot(hvec, posteriors[len(bvec):])
+
+    if True:  # if omit tiny posteriors
+      maxp = np.max(posteriors)
+      cutoff = 20
+      bs, hs, posteriors = zip(
+          *[(b, h, p) for b, h, p in zip(bs, hs, posteriors) if p > (maxp - cutoff)])
+    print(f'cutoff len={len(bs)}')
+    fit = ebisu._fitJointToTwoGammas(bs, hs, posteriors, weightPower=weightPower)
+    fit['meanX'] = ebisu._gammaToMean(fit['alphax'], fit['betax'])
+    fit['meanY'] = ebisu._gammaToMean(fit['alphay'], fit['betay'])
+    return fit
+
+  def mkfit2(maxBoost, maxHalflife, total=202):
+    bvec = np.linspace(MIN_BOOST, maxBoost, 101)
+    hvec = np.linspace(minHalflife, maxHalflife, 101)
+
+    bs = np.random.rand(total) * (maxBoost - MIN_BOOST) + MIN_BOOST
+    hs = np.random.rand(total) * (maxHalflife - minHalflife) + minHalflife
+
+    bs = np.hstack([bs, bvec])
+    hs = np.hstack([hs, hvec])
+
+    posteriors = np.vectorize(posterior2d)(bs, hs)
+    fit = ebisu._fitJointToTwoGammas(bs, hs, posteriors, weightPower=3.0)
+    fit['meanX'] = ebisu._gammaToMean(fit['alphax'], fit['betax'])
+    fit['meanY'] = ebisu._gammaToMean(fit['alphay'], fit['betay'])
+    return fit
+
+  rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
+
+  def imshow(x, y, z, ax=plt):
+
+    def extents(f):
+      delta = f[1] - f[0]
+      return [f[0] - delta / 2, f[-1] + delta / 2]
+
+    return ax.imshow(
+        z, aspect='auto', interpolation='none', extent=extents(x) + extents(y), origin='lower')
+
+  fig, ax = plt.subplots()
+  im = imshow(bvec, hvec, z, ax=ax)
+  ax.set_xlabel('boost')
+  ax.set_ylabel('init halflife')
+  fig.colorbar(im)
+  rescalec(im, 20)
+
+  fit = mkfit(maxBoost, maxHalflife, weightPower=weightPower)
+  fit2 = mkfit2(maxBoost, maxHalflife, total=fit2total)
+  return dict(fig=fig, ax=ax, im=im, bestb=bestb, besth=besth, fit=fit, fit2=fit2, fitall=fitall)
 
 
 def flatten(list_of_lists):
@@ -488,7 +584,16 @@ def printModel(nextFull: ebisu.Model, nextSimple: ebisu.Model):
 
 if __name__ == '__main__':
   t = TestEbisu()
-  t.test_full()
+  upd = t.test_full()
+  from scipy.optimize import shgo  # type: ignore
+  import pylab as plt  #type:ignore
+  plt.ion()
+
+  rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
+
+  v = vizPosterior(upd, fit2total=2002, weightPower=0.0)
+  print(v['fitall']['meanY'], v['fit2']['meanY'], v['fit']['meanY'])
+
   import os
   # get just this file's module name: no `.py` and no path
   name = os.path.basename(__file__).replace(".py", "")
