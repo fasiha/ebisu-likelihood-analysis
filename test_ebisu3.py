@@ -8,13 +8,108 @@ $ python test_ebisu3.py
 import ebisu3 as ebisu
 import unittest
 from scipy.stats import gamma as gammarv, binom as binomrv, bernoulli  # type: ignore
-from scipy.special import logsumexp  # type: ignore
+from scipy.special import logsumexp, loggamma  # type: ignore
+from scipy.optimize import shgo, minimize  # type: ignore
 import numpy as np
 from typing import Optional, Union
 import math
 from dataclasses import dataclass, replace
+from utils import sequentialImportanceResample
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
+
+
+def fitJointTwoGammas(x, y):
+  sumlogs = [np.sum(np.log(v)) for v in [x, y]]
+  means = [np.mean(v) for v in [x, y]]
+  n = len(x)
+  loglik1 = lambda k, sumlog, mean: (
+      (k - 1) * sumlog - n * k - n * k * np.log(mean / k) - n * loggamma(k))
+  loglik = lambda ks: loglik1(ks[0], sumlogs[0], means[0]) + loglik1(ks[1], sumlogs[1], means[1])
+  sol = shgo(lambda ks: -loglik(ks), [(0.01, 50)] * 2)
+  kx, ky = sol.x
+  thetax, thetay = np.array(means) / sol.x
+
+  alphax, alphay = [kx, ky]
+  betax, betay = [1 / thetax, 1 / thetay]
+
+  return dict(
+      sol=sol,
+      alphax=alphax,
+      betax=betax,
+      alphay=alphay,
+      betay=betay,
+      meanX=ebisu._gammaToMean(alphax, betax),
+      meanY=ebisu._gammaToMean(alphay, betay),
+  )
+
+
+def fitJointTwoGammasWeighted2(x, y, w):
+  "2D search via fixing theta in terms of k"
+  wsum = math.fsum(w)
+
+  meanlogs = [math.fsum(w * np.log(v)) / wsum for v in [x, y]]
+  means = [math.fsum(w * v) / wsum for v in [x, y]]
+  n = len(x)
+  loglik1 = lambda k, meanlog, mean: (
+      (k - 1) * n * meanlog - n * k - n * k * np.log(mean / k) - n * loggamma(k))
+  loglik = lambda ks: loglik1(ks[0], meanlogs[0], means[0]) + loglik1(ks[1], meanlogs[1], means[1])
+  sol = shgo(lambda ks: -loglik(ks), [(0.01, 50)] * 2)
+  kx, ky = sol.x
+  thetax, thetay = np.array(means) / sol.x
+
+  alphax, alphay = [kx, ky]
+  betax, betay = [1 / thetax, 1 / thetay]
+
+  return dict(
+      sol=sol,
+      alphax=alphax,
+      betax=betax,
+      alphay=alphay,
+      betay=betay,
+      meanX=ebisu._gammaToMean(alphax, betax),
+      meanY=ebisu._gammaToMean(alphay, betay),
+  )
+
+
+def fitJointTwoGammasWeighted(x, y, w):
+  "4D search"
+  fits = [weightedGammaEstimate(v, w) for v in [x, y]]
+
+  wsum = math.fsum(w)
+
+  meanlogs = [math.fsum(w * np.log(v)) / wsum for v in [x, y]]
+  means = [math.fsum(w * v) / wsum for v in [x, y]]
+  # divide through by n=len(x):
+  loglik1 = lambda k, t, meanlog, mean: (k - 1) * meanlog - mean / t - k * np.log(t) - loggamma(k)
+  loglik = lambda kts: (
+      loglik1(kts[0], kts[1], meanlogs[0], means[0]) + loglik1(kts[2], kts[3], meanlogs[1], means[1]
+                                                              ))
+  sol = shgo(lambda x: -loglik(x), [(0.01, 50)] * 4)
+  kx, thetax, ky, thetay = sol.x
+  alphax, alphay = [kx, ky]
+  betax, betay = [1 / thetax, 1 / thetay]
+
+  # convert alpha/beta Gamma parameterization to k/theta: k=alpha, beta=1/theta
+  init = np.array([fits[0][0], 1 / fits[0][1], fits[1][0], 1 / fits[1][1]])
+  bounds = [(0, np.inf)] * 4
+
+  sol2 = minimize(lambda x: -loglik(x), init, bounds=bounds, method='Nelder-Mead')
+  # Weird, shgo doesn't converge (picks the mid-point of bounds) but Nelder-Mead does much better
+  # But point remains the that ML-fitting the posterior samples to bivariate independent Gamma
+  return dict(
+      sol=sol,
+      # alphax=alphax,
+      # betax=betax,
+      # alphay=alphay,
+      # betay=betay,
+      meanXY=[ebisu._gammaToMean(alphax, betax),
+              ebisu._gammaToMean(alphay, betay)],
+      sol2=sol2,
+      meanXY2=[
+          ebisu._gammaToMean(sol2.x[0], 1 / sol2.x[1]),
+          ebisu._gammaToMean(sol2.x[2], 1 / sol2.x[3])
+      ])
 
 
 def fullBinomialMonteCarlo(
@@ -45,7 +140,7 @@ def fullBinomialMonteCarlo(
     if ebisu.success(ebisu.BinomialResult(k, n)):  # reuse same rule as ebisu
       hls *= clampLerp(left * hls, hls, np.minimum(boosts, 1.0), boosts, t)
 
-  kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights))
+  kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / size
   posteriorBoost = weightedMeanLogw(logweights, boosts)
   posteriorInitHl = weightedMeanLogw(logweights, hl0s)
   # posteriorCurrHl = weightedMeanLogw(logweights, hls)
@@ -58,6 +153,9 @@ def fullBinomialMonteCarlo(
       kishEffectiveSampleSize=kishEffectiveSampleSize,
       posteriorBoost=posteriorBoost,
       posteriorInitHl=posteriorInitHl,
+      # modeHl0=modeHl0,
+      corr=np.corrcoef(np.vstack([hl0s, hls, boosts])),
+      fit=fitJointTwoGammasWeighted(hl0s, boosts, np.exp(logweights))
       # posteriorCurrHl=posteriorCurrHl,
       # estb=estb,
       # esthl0=esthl0,
@@ -425,7 +523,7 @@ class TestEbisu(unittest.TestCase):
 
     left = 0.3
     for fraction in [1.5]:
-      for result in [0]:
+      for result in [1]:
         elapsedHours = fraction * initHlMean
         ebisu._appendQuiz(upd, elapsedHours, ebisu.BinomialResult(result, 1), 1.0)
 
@@ -443,16 +541,16 @@ class TestEbisu(unittest.TestCase):
         # print('===')
         # continue
 
-        import mpmath as mp  # type:ignore
-        f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
-        den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
-        fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
-        numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
-        fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
-        numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
-        print([numb, numh, den])
-        print([numb / den, numh / den])
-        return upd
+        # import mpmath as mp  # type:ignore
+        # f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        # den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
+        # fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        # numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
+        # fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        # numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
+        # print([numb, numh, den])
+        # print([numb / den, numh / den])
+        # return upd
 
         mc = fullBinomialMonteCarlo(
             init.initHalflifePrior,

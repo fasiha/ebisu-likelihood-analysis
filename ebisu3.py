@@ -348,7 +348,14 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
   betay = t[3]
 
   assert all(x > 0 for x in [alphax, betax, alphay, betay]), 'positive gamma parameters'
-  return dict(sol=sol, alphax=alphax, betax=betax, alphay=alphay, betay=betay)
+  return dict(
+      sol=sol,
+      alphax=alphax,
+      betax=betax,
+      alphay=alphay,
+      betay=betay,
+      meanX=_gammaToMean(alphax, betax),
+      meanY=_gammaToMean(alphay, betay))
 
 
 def flatten(list_of_lists):
@@ -378,6 +385,7 @@ def fullUpdateRecall(
   opt = shgo(lambda x: -posterior2d(x[0], x[1]), [(MIN_BOOST, maxBoost),
                                                   (minHalflife, maxHalflife)])
   bestb, besth = opt.x
+  print(f'{bestb=}, {besth=}')
   bs = []
   hs = []
   posteriors = []
