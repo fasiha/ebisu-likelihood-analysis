@@ -625,7 +625,7 @@ def vizPosterior(ret: ebisu.Model,
 
     if True:  # if omit tiny posteriors
       maxp = np.max(posteriors)
-      cutoff = 20
+      cutoff = 3
       bs, hs, posteriors = zip(
           *[(b, h, p) for b, h, p in zip(bs, hs, posteriors) if p > (maxp - cutoff)])
     print(f'cutoff len={len(bs)}')
@@ -752,3 +752,29 @@ if __name__ == '__main__':
   # get just this file's module name: no `.py` and no path
   name = os.path.basename(__file__).replace(".py", "")
   # unittest.TextTestRunner(failfast=True).run(unittest.TestLoader().loadTestsFromName(name))
+
+  import utils
+  df = utils.sqliteToDf('collection.anki2', True)
+  print(f'loaded SQL data, {len(df)} rows')
+  train, TEST_TRAIN = utils.traintest(df)
+
+  t = train[10]
+  data = replace(clean)
+  data.elapseds = [[t for t in t.dts_hours]]
+  data.results = [[ebisu.BinomialResult(1 if x >= 2 else 0, 1) for x in t.results]]
+  data.startStrengths = [[1.0 for t in t.dts_hours]]
+  datav = vizPosterior(data, size=1_000_000, fit2total=2002, weightPower=0.0)
+
+  def integrals(model):
+    import mpmath as mp  # type:ignore
+    f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
+    den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
+    fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
+    numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
+    fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
+    numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
+    return dict(meanXY=[numb / den, numh / den], vals=[numb, numh, den])
+
+  mom = integrals(data)
+  print(mom)
+  print([f'{k}={datav[k]["meanY"]}' for k in ['fitall', 'fit2', 'fit']])
