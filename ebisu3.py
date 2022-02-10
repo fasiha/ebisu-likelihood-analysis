@@ -297,6 +297,7 @@ def _makeLogPrecalls_Halflives(b: float,
 
 
 def _posterior(b: float, h: float, ret: Model, left: float, right: float):
+  "log posterior up to a constant offset"
   ab, bb = ret.boostPrior
   ah, bh = ret.initHalflifePrior
 
@@ -386,6 +387,7 @@ def fullUpdateRecall(
                                                   (minHalflife, maxHalflife)])
   bestb, besth = opt.x
   print(f'{bestb=}, {besth=}')
+
   bs = []
   hs = []
   posteriors = []

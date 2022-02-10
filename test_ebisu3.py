@@ -74,8 +74,6 @@ def fitJointTwoGammasWeighted2(x, y, w):
 
 def fitJointTwoGammasWeighted(x, y, w):
   "4D search"
-  fits = [weightedGammaEstimate(v, w) for v in [x, y]]
-
   wsum = math.fsum(w)
 
   meanlogs = [math.fsum(w * np.log(v)) / wsum for v in [x, y]]
@@ -85,31 +83,33 @@ def fitJointTwoGammasWeighted(x, y, w):
   loglik = lambda kts: (
       loglik1(kts[0], kts[1], meanlogs[0], means[0]) + loglik1(kts[2], kts[3], meanlogs[1], means[1]
                                                               ))
-  sol = shgo(lambda x: -loglik(x), [(0.01, 50)] * 4)
-  kx, thetax, ky, thetay = sol.x
-  alphax, alphay = [kx, ky]
-  betax, betay = [1 / thetax, 1 / thetay]
+  if False:
+    sol = shgo(lambda x: -loglik(x), [(0.01, 50)] * 4)
+    kx, thetax, ky, thetay = sol.x
+    alphax, alphay = [kx, ky]
+    betax, betay = [1 / thetax, 1 / thetay]
+  else:
+    # convert alpha/beta Gamma parameterization to k/theta: k=alpha, beta=1/theta
+    fits = [weightedGammaEstimate(v, w) for v in [x, y]]
+    init = np.array([fits[0][0], 1 / fits[0][1], fits[1][0], 1 / fits[1][1]])
+    bounds = [(0, np.inf)] * 4
 
-  # convert alpha/beta Gamma parameterization to k/theta: k=alpha, beta=1/theta
-  init = np.array([fits[0][0], 1 / fits[0][1], fits[1][0], 1 / fits[1][1]])
-  bounds = [(0, np.inf)] * 4
-
-  sol2 = minimize(lambda x: -loglik(x), init, bounds=bounds, method='Nelder-Mead')
-  # Weird, shgo doesn't converge (picks the mid-point of bounds) but Nelder-Mead does much better
-  # But point remains the that ML-fitting the posterior samples to bivariate independent Gamma
+    sol = minimize(lambda x: -loglik(x), init, bounds=bounds, method='Nelder-Mead')
+    # Weird, shgo doesn't converge (picks the mid-point of bounds) but Nelder-Mead does much better
+    # But point remains the that ML-fitting the posterior samples to bivariate independent Gamma
+    alphax = sol.x[0]
+    betax = 1 / sol.x[1]
+    alphay = sol.x[2]
+    betay = 1 / sol.x[3]
   return dict(
       sol=sol,
-      # alphax=alphax,
-      # betax=betax,
-      # alphay=alphay,
-      # betay=betay,
+      alphax=alphax,
+      betax=betax,
+      alphay=alphay,
+      betay=betay,
       meanXY=[ebisu._gammaToMean(alphax, betax),
               ebisu._gammaToMean(alphay, betay)],
-      sol2=sol2,
-      meanXY2=[
-          ebisu._gammaToMean(sol2.x[0], 1 / sol2.x[1]),
-          ebisu._gammaToMean(sol2.x[2], 1 / sol2.x[3])
-      ])
+  )
 
 
 def fullBinomialMonteCarlo(
@@ -154,8 +154,8 @@ def fullBinomialMonteCarlo(
       posteriorBoost=posteriorBoost,
       posteriorInitHl=posteriorInitHl,
       # modeHl0=modeHl0,
-      corr=np.corrcoef(np.vstack([hl0s, hls, boosts])),
-      fit=fitJointTwoGammasWeighted(hl0s, boosts, np.exp(logweights))
+      # corr=np.corrcoef(np.vstack([hl0s, hls, boosts])),
+      fit=fitJointTwoGammasWeighted(boosts, hl0s, np.exp(logweights))
       # posteriorCurrHl=posteriorCurrHl,
       # estb=estb,
       # esthl0=esthl0,
@@ -531,7 +531,7 @@ class TestEbisu(unittest.TestCase):
                                            [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
           ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
 
-        # return upd
+        return upd
         full = ebisu.fullUpdateRecall(upd, left=left)
         d = {
             'boostMean': ebisu._gammaToMean(*full.boostPrior),
@@ -567,13 +567,28 @@ class TestEbisu(unittest.TestCase):
         return upd
 
 
-def vizPosterior(ret: ebisu.Model, left=0.3, right=1.0, fit2total=202, weightPower=0.0):
+def vizPosterior(ret: ebisu.Model,
+                 size=10_000_000,
+                 left=0.3,
+                 right=1.0,
+                 fit2total=202,
+                 weightPower=0.0):
+  mc = fullBinomialMonteCarlo(
+      ret.initHalflifePrior,
+      ret.boostPrior,
+      [t for t in ret.elapseds[-1]],
+      [r.successes for r in ret.results[-1]],
+      [1 for t in ret.elapseds[-1]],
+      size=size,
+  )
+  print(f'{mc=}')
+
   MIN_BOOST = 1.0
   ab, bb = ret.boostPrior
   ah, bh = ret.initHalflifePrior
-  midBoost, maxBoost = gammarv.ppf([0.7, 0.99], ab, scale=1.0 / bb)
-  minHalflife, midHalflife, maxHalflife = gammarv.ppf([0.01, 0.7, 0.99], ah, scale=1.0 / bh)
-  bvec = np.linspace(MIN_BOOST, maxBoost, 101)
+  minBoost, midBoost, maxBoost = gammarv.ppf([.01, 0.7, 0.9999], ab, scale=1.0 / bb)
+  minHalflife, midHalflife, maxHalflife = gammarv.ppf([0.01, 0.7, 0.9999], ah, scale=1.0 / bh)
+  bvec = np.linspace(minBoost, maxBoost, 101)
   hvec = np.linspace(minHalflife, maxHalflife, 101)
   bmat, hmat = np.meshgrid(bvec, hvec)
 
@@ -608,10 +623,6 @@ def vizPosterior(ret: ebisu.Model, left=0.3, right=1.0, fit2total=202, weightPow
       bs.append(bestb)
       hs.append(h)
 
-    # fig, ax = plt.subplots(2, 1)
-    # ax[0].plot(bvec, posteriors[:len(bvec)])
-    # ax[1].plot(hvec, posteriors[len(bvec):])
-
     if True:  # if omit tiny posteriors
       maxp = np.max(posteriors)
       cutoff = 20
@@ -621,6 +632,46 @@ def vizPosterior(ret: ebisu.Model, left=0.3, right=1.0, fit2total=202, weightPow
     fit = ebisu._fitJointToTwoGammas(bs, hs, posteriors, weightPower=weightPower)
     fit['meanX'] = ebisu._gammaToMean(fit['alphax'], fit['betax'])
     fit['meanY'] = ebisu._gammaToMean(fit['alphay'], fit['betay'])
+
+    if True:
+      remmax = lambda v: np.array(v) - np.max(v)
+      fig, ax = plt.subplots(2, 1)
+      ax[0].plot(
+          bvec,
+          remmax([posterior2d(b, besth) for b in bvec]),
+          marker='.',
+          label='analytical posterior')
+      ax[0].plot(
+          bvec,
+          remmax(gammarv.logpdf(bvec, fit['alphax'], scale=1 / fit['betax'])),
+          marker='.',
+          linestyle='--',
+          label='posterior curve fit')
+      ax[0].plot(
+          bvec,
+          remmax(gammarv.logpdf(bvec, mc['fit']['alphax'], scale=1 / mc['fit']['betax'])),
+          marker='.',
+          label='Monte Carlo fit')
+      ax[0].legend()
+
+      ax[1].plot(
+          hvec,
+          remmax([posterior2d(bestb, h) for h in hvec]),
+          marker='.',
+          label='analytical posterior')
+      ax[1].plot(
+          hvec,
+          remmax(gammarv.logpdf(hvec, fit['alphay'], scale=1 / fit['betay'])),
+          marker='.',
+          linestyle='--',
+          label='posterior curve fit')
+      ax[1].plot(
+          hvec,
+          remmax(gammarv.logpdf(hvec, mc['fit']['alphay'], scale=1 / mc['fit']['betay'])),
+          marker='.',
+          label='Monte Carlo fit')
+      ax[1].legend()
+
     return fit
 
   def mkfit2(maxBoost, maxHalflife, total=202):
@@ -683,14 +734,19 @@ def printModel(nextFull: ebisu.Model, nextSimple: ebisu.Model):
 if __name__ == '__main__':
   t = TestEbisu()
   upd = t.test_full()
+  clean = replace(upd)
+  clean.elapseds = [[]]
+  clean.results = [[]]
+  clean.startStrengths = [[]]
   from scipy.optimize import shgo  # type: ignore
   import pylab as plt  #type:ignore
   plt.ion()
 
   rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
 
-  v = vizPosterior(upd, fit2total=2002, weightPower=0.0)
-  print(v['fitall']['meanY'], v['fit2']['meanY'], v['fit']['meanY'])
+  v = vizPosterior(upd, size=1_000_000, fit2total=2002, weightPower=1.0)
+  print([f'{k}={v[k]["meanY"]}' for k in ['fitall', 'fit2', 'fit']])
+  # v2 = vizPosterior(clean, size=100_000, fit2total=2002, weightPower=0.0)
 
   import os
   # get just this file's module name: no `.py` and no path
