@@ -157,6 +157,8 @@ def fullBinomialMonteCarlo(
       kishEffectiveSampleSize=kishEffectiveSampleSize,
       posteriorBoost=estb,
       posteriorInitHl=esthl0,
+      statsBoost=weightedMeanVarLogw(logweights, boosts),
+      statsInitHl=weightedMeanVarLogw(logweights, hl0s),
       # modeHl0=modeHl0,
       # corr=np.corrcoef(np.vstack([hl0s, hls, boosts])),
       fit=fitJointTwoGammasWeighted(boosts, hl0s, w)
@@ -192,7 +194,17 @@ def clampLerp(x1: np.ndarray, x2: np.ndarray, y1: np.ndarray, y2: np.ndarray, x:
 
 
 def weightedMeanLogw(logw: np.ndarray, x: np.ndarray) -> np.ndarray:
+  # [weightedMean] https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Mathematical_definition
   return np.exp(logsumexp(logw, b=x) - logsumexp(logw))
+
+
+def weightedMeanVarLogw(logw: np.ndarray, x: np.ndarray) -> tuple[float, float]:
+  # [weightedMean] https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Mathematical_definition
+  # [weightedVar] https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Weighted_sample_variance
+  logsumexpw = logsumexp(logw)
+  mean = np.exp(logsumexp(logw, b=x) - logsumexpw)
+  var = np.exp(logsumexp(logw, b=(x - mean)**2) - logsumexpw)
+  return (mean, var)
 
 
 def _gammaUpdateBinomialMonteCarlo(
@@ -564,18 +576,18 @@ class TestEbisu(unittest.TestCase):
         if True:
           print(f'an={full.initHalflifePrior}; mc={mc["posteriorInitHl"]}')
           print(
-              f'mean: an={ebisu._gammaToMean(*full.initHalflifePrior)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; int={hl0MeanInt}'
+              f'mean: an={ebisu._gammaToMean(*full.initHalflifePrior)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][0]}; int={hl0MeanInt}'
           )
           print(
-              f'VAR: an={_gammaToVar(*full.initHalflifePrior)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; int={hl0VarInt}'
+              f'VAR: an={_gammaToVar(*full.initHalflifePrior)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][1]}; int={hl0VarInt}'
           )
 
           print(f'an={full.boostPrior}; mc={mc["posteriorBoost"]}')
           print(
-              f'mean: an={ebisu._gammaToMean(*full.boostPrior)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; int={boostMeanInt}'
+              f'mean: an={ebisu._gammaToMean(*full.boostPrior)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][0]}; int={boostMeanInt}'
           )
           print(
-              f'VAR: an={_gammaToVar(*full.boostPrior)}; mc={_gammaToVar(*mc["posteriorBoost"])}; int={boostVarInt}'
+              f'VAR: an={_gammaToVar(*full.boostPrior)}; mc={_gammaToVar(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][1]}; int={boostVarInt}'
           )
 
         self.assertLess(
@@ -666,13 +678,15 @@ def vizPosterior(ret: ebisu.Model,
 
     if True:  # if omit tiny posteriors
       maxp = np.max(posteriors)
-      cutoff = 3
+      cutoff = 6
       bs, hs, posteriors = zip(
           *[(b, h, p) for b, h, p in zip(bs, hs, posteriors) if p > (maxp - cutoff)])
     print(f'cutoff len={len(bs)}')
     fit = ebisu._fitJointToTwoGammas(bs, hs, posteriors, weightPower=weightPower)
     fit['meanX'] = ebisu._gammaToMean(fit['alphax'], fit['betax'])
     fit['meanY'] = ebisu._gammaToMean(fit['alphay'], fit['betay'])
+    fit['varX'] = _gammaToVar(fit['alphax'], fit['betax'])
+    fit['varY'] = _gammaToVar(fit['alphay'], fit['betay'])
 
     if True:
       remmax = lambda v: np.array(v) - np.max(v)
@@ -787,10 +801,10 @@ if False:
   rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
 
   v = vizPosterior(upd, size=1_000_000, fit2total=2002, weightPower=0.0)
-  print([f'{k}={v[k]["meanY"]}' for k in ['fitall', 'fit2', 'fit']])
+  print({k: v['fit'][k] for k in v['fit'] if k != "sol"})
   print(integrals(upd))
+  # print([f'{k}={v[k]["meanY"]}' for k in ['fitall', 'fit2', 'fit']])
   # v2 = vizPosterior(clean, size=100_000, fit2total=2002, weightPower=0.0)
-
   import utils
   df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
