@@ -540,8 +540,10 @@ class TestEbisu(unittest.TestCase):
         logStrength=0.0,
     )
 
+    import mpmath as mp  # type:ignore
+
     left = 0.3
-    for fraction in [0.5, 1.5]:
+    for fraction in [0.1, 0.5, 1.5, 9.5]:
       for result in [1, 0]:
         upd = replace(init)
         elapsedHours = fraction * initHlMean
@@ -557,9 +559,8 @@ class TestEbisu(unittest.TestCase):
         def posterior2d(b, h):
           return ebisu._posterior(float(b), float(h), upd, 0.3, 1.0)
 
-        import mpmath as mp  # type:ignore
         method = 'gauss-legendre'
-        maxdegree = 4
+        maxdegree = 4 if fraction < 9 else 5
         tic = time.perf_counter()
         f0 = lambda b, h: mp.exp(posterior2d(b, h))
         den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
@@ -586,7 +587,7 @@ class TestEbisu(unittest.TestCase):
             [1 for t in upd.elapseds[-1]],
             size=1_000_000)
         toc = time.perf_counter()
-        print(f"Monte Carlo: {toc - tic:0.4f} seconds")
+        print(f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}")
 
         if False:
           print(f'an={full.initHalflifePrior}; mc={mc["posteriorInitHl"]}')
@@ -596,7 +597,7 @@ class TestEbisu(unittest.TestCase):
           print(
               f'VAR: an={_gammaToVar(*full.initHalflifePrior)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][1]}; int={hl0VarInt}'
           )
-
+        if False:
           print(f'an={full.boostPrior}; mc={mc["posteriorBoost"]}')
           print(
               f'mean: an={ebisu._gammaToMean(*full.boostPrior)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][0]}; int={boostMeanInt}'
@@ -609,25 +610,25 @@ class TestEbisu(unittest.TestCase):
             relativeError(
                 ebisu._gammaToMean(*full.initHalflifePrior),
                 ebisu._gammaToMean(*mc["posteriorInitHl"])),
-            0.1,
-            'analytical ~ monte carlo mean hl0',
+            0.15,
+            f'analytical ~ monte carlo mean hl0, {fraction=}, {result=}',
         )
         self.assertLess(
             relativeError(hl0MeanInt, ebisu._gammaToMean(*mc["posteriorInitHl"])),
             0.04,
-            'numerical integration ~ monte carlo mean hl0',
+            f'numerical integration ~ monte carlo mean hl0, {fraction=}, {result=}',
         )
 
         self.assertLess(
             relativeError(
                 ebisu._gammaToMean(*full.boostPrior), ebisu._gammaToMean(*mc["posteriorBoost"])),
-            0.1,
-            'analytical ~ monte carlo mean boost',
+            0.15,
+            f'analytical ~ monte carlo mean boost, {fraction=}, {result=}',
         )
         self.assertLess(
             relativeError(boostMeanInt, ebisu._gammaToMean(*mc["posteriorBoost"])),
             0.02,
-            'numerical integration ~ numerical integration mean boost',
+            f'numerical integration ~ numerical integration mean boost, {fraction=}, {result=}',
         )
     return upd
 
