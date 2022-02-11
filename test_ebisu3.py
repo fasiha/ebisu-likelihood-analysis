@@ -541,8 +541,8 @@ class TestEbisu(unittest.TestCase):
     )
 
     left = 0.3
-    for fraction in [1.5]:
-      for result in [1]:
+    for fraction in [0.5, 1.5]:
+      for result in [1, 0]:
         upd = replace(init)
         elapsedHours = fraction * initHlMean
         ebisu._appendQuiz(upd, elapsedHours, ebisu.BinomialResult(result, 1), 1.0)
@@ -558,19 +558,21 @@ class TestEbisu(unittest.TestCase):
           return ebisu._posterior(float(b), float(h), upd, 0.3, 1.0)
 
         import mpmath as mp  # type:ignore
+        method = 'gauss-legendre'
+        maxdegree = 4
         tic = time.perf_counter()
         f0 = lambda b, h: mp.exp(posterior2d(b, h))
-        den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=4, method='gauss-legendre')
+        den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
         fb = lambda b, h: b * mp.exp(posterior2d(b, h))
-        numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=4, method='gauss-legendre')
+        numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
         fh = lambda b, h: h * mp.exp(posterior2d(b, h))
-        numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=4, method='gauss-legendre')
+        numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
 
         # second non-central moment
         fh = lambda b, h: h**2 * mp.exp(posterior2d(b, h))
-        numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=4, method='gauss-legendre')
+        numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
         fb = lambda b, h: b**2 * mp.exp(posterior2d(b, h))
-        numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=4, method='gauss-legendre')
+        numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
         toc = time.perf_counter()
         print(f"Numerical integration: {toc - tic:0.4f} seconds")
 
@@ -586,7 +588,7 @@ class TestEbisu(unittest.TestCase):
         toc = time.perf_counter()
         print(f"Monte Carlo: {toc - tic:0.4f} seconds")
 
-        if True:
+        if False:
           print(f'an={full.initHalflifePrior}; mc={mc["posteriorInitHl"]}')
           print(
               f'mean: an={ebisu._gammaToMean(*full.initHalflifePrior)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][0]}; int={hl0MeanInt}'
@@ -612,7 +614,7 @@ class TestEbisu(unittest.TestCase):
         )
         self.assertLess(
             relativeError(hl0MeanInt, ebisu._gammaToMean(*mc["posteriorInitHl"])),
-            0.02,
+            0.04,
             'numerical integration ~ monte carlo mean hl0',
         )
 
@@ -627,7 +629,7 @@ class TestEbisu(unittest.TestCase):
             0.02,
             'numerical integration ~ numerical integration mean boost',
         )
-        return upd
+    return upd
 
 
 def vizPosterior(ret: ebisu.Model,
