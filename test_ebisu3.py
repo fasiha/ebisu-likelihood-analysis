@@ -15,6 +15,7 @@ from typing import Optional, Union
 import math
 from dataclasses import dataclass, replace
 from utils import sequentialImportanceResample
+import time
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 
@@ -552,26 +553,33 @@ class TestEbisu(unittest.TestCase):
         full = ebisu.fullUpdateRecall(upd, left=left)
 
         import mpmath as mp  # type:ignore
+        tic = time.perf_counter()
         f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
         den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
         fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
         numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
         fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
         numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
-        boostMeanInt, hl0MeanInt = numb / den, numh / den
 
         # second non-central moment
         fh = lambda b, h: h**2 * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
         numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf])
         fb = lambda b, h: b**2 * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
         numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf])
+        toc = time.perf_counter()
+        print(f"Numerical integration: {toc - tic:0.4f} seconds")
+
+        boostMeanInt, hl0MeanInt = numb / den, numh / den
         boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
 
+        tic = time.perf_counter()
         mc = fullBinomialMonteCarlo(
             init.initHalflifePrior,
             init.boostPrior, [t for t in upd.elapseds[-1]], [r.successes for r in upd.results[-1]],
             [1 for t in upd.elapseds[-1]],
             size=1_000_000)
+        toc = time.perf_counter()
+        print(f"Monte Carlo: {toc - tic:0.4f} seconds")
 
         if True:
           print(f'an={full.initHalflifePrior}; mc={mc["posteriorInitHl"]}')
