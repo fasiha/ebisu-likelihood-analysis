@@ -359,12 +359,6 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
       meanY=_gammaToMean(alphay, betay))
 
 
-def flatten(list_of_lists):
-  "Flatten one level of nesting"
-  from itertools import chain
-  return chain.from_iterable(list_of_lists)
-
-
 def fullUpdateRecall(
     model: Model,
     now: Union[None, float] = None,
@@ -381,25 +375,27 @@ def fullUpdateRecall(
   MIN_BOOST = 1.0
   ab, bb = ret.boostPrior
   ah, bh = ret.initHalflifePrior
-  maxBoost = gammarv.ppf(0.99, ab, scale=1.0 / bb)
-  minHalflife, maxHalflife = gammarv.ppf([0.01, 0.99], ah, scale=1.0 / bh)
+  maxBoost = gammarv.ppf(0.9999, ab, scale=1.0 / bb)
+  minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
   opt = shgo(lambda x: -posterior2d(x[0], x[1]), [(MIN_BOOST, maxBoost),
                                                   (minHalflife, maxHalflife)])
   bestb, besth = opt.x
-  print(f'{bestb=}, {besth=}')
 
-  bs = []
-  hs = []
-  posteriors = []
-  for b in np.linspace(MIN_BOOST, maxBoost, 101):
+  bs: list[float] = []
+  hs: list[float] = []
+  posteriors: list[float] = []
+  for b in np.linspace(MIN_BOOST, maxBoost, 201):
     posteriors.append(posterior2d(b, besth))
     bs.append(b)
     hs.append(besth)
-  for h in np.linspace(minHalflife, maxHalflife, 101):
+  for h in np.linspace(minHalflife, maxHalflife, 201):
     posteriors.append(posterior2d(bestb, h))
     bs.append(bestb)
     hs.append(h)
-  fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
+  cutoff = 3  # logposteriors within this of the peak will be fit
+  maxposterior = max(posteriors)
+  filt = lambda v: [x for x, p in zip(v, posteriors) if p >= maxposterior - cutoff]
+  fit = _fitJointToTwoGammas(filt(bs), filt(hs), filt(posteriors), weightPower=0.0)
 
   # update prior(s)
   ret.boostPrior = (fit['alphax'], fit['betax'])

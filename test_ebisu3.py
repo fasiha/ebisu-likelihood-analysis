@@ -19,6 +19,10 @@ from utils import sequentialImportanceResample
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 
 
+def _gammaToVar(alpha: float, beta: float) -> float:
+  return alpha / beta**2
+
+
 def fitJointTwoGammas(x, y):
   sumlogs = [np.sum(np.log(v)) for v in [x, y]]
   means = [np.mean(v) for v in [x, y]]
@@ -141,21 +145,21 @@ def fullBinomialMonteCarlo(
       hls *= clampLerp(left * hls, hls, np.minimum(boosts, 1.0), boosts, t)
 
   kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / size
-  posteriorBoost = weightedMeanLogw(logweights, boosts)
-  posteriorInitHl = weightedMeanLogw(logweights, hl0s)
+  # posteriorBoost = weightedMeanLogw(logweights, boosts)
+  # posteriorInitHl = weightedMeanLogw(logweights, hl0s)
   # posteriorCurrHl = weightedMeanLogw(logweights, hls)
-  # w = np.exp(logweights)
   # sisHl0s = sequentialImportanceResample(hl0s, w)[0]
-  # estb = ebisu._gammaToMean(*weightedGammaEstimate(boosts, w))
-  # esthl0 = ebisu._gammaToMean(*weightedGammaEstimate(hl0s, w))
+  w = np.exp(logweights)
+  estb = weightedGammaEstimate(boosts, w)
+  esthl0 = weightedGammaEstimate(hl0s, w)
   # esthl = ebisu._gammaToMean(*weightedGammaEstimate(hls, w))
   return dict(
       kishEffectiveSampleSize=kishEffectiveSampleSize,
-      posteriorBoost=posteriorBoost,
-      posteriorInitHl=posteriorInitHl,
+      posteriorBoost=estb,
+      posteriorInitHl=esthl0,
       # modeHl0=modeHl0,
       # corr=np.corrcoef(np.vstack([hl0s, hls, boosts])),
-      fit=fitJointTwoGammasWeighted(boosts, hl0s, np.exp(logweights))
+      fit=fitJointTwoGammasWeighted(boosts, hl0s, w)
       # posteriorCurrHl=posteriorCurrHl,
       # estb=estb,
       # esthl0=esthl0,
@@ -164,6 +168,9 @@ def fullBinomialMonteCarlo(
 
 
 def weightedGammaEstimate(h, w):
+  """
+  See https://en.wikipedia.org/w/index.php?title=Gamma_distribution&oldid=1067698046#Closed-form_estimators
+  """
   wsum = math.fsum(w)
   that2 = np.sum(w * h * np.log(h)) / wsum - np.sum(w * h) / wsum * np.sum(w * np.log(h)) / wsum
   khat2 = np.sum(w * h) / wsum / that2
@@ -519,11 +526,10 @@ class TestEbisu(unittest.TestCase):
         logStrength=0.0,
     )
 
-    upd = replace(init)
-
     left = 0.3
     for fraction in [1.5]:
       for result in [1]:
+        upd = replace(init)
         elapsedHours = fraction * initHlMean
         ebisu._appendQuiz(upd, elapsedHours, ebisu.BinomialResult(result, 1), 1.0)
 
@@ -531,39 +537,71 @@ class TestEbisu(unittest.TestCase):
                                            [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
           ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
 
-        return upd
         full = ebisu.fullUpdateRecall(upd, left=left)
-        d = {
-            'boostMean': ebisu._gammaToMean(*full.boostPrior),
-            'initHlMean': ebisu._gammaToMean(*full.initHalflifePrior),
-        }
-        print(f'full={d}')
-        # print('===')
-        # continue
 
-        # import mpmath as mp  # type:ignore
-        # f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
-        # den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
-        # fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
-        # numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
-        # fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
-        # numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
-        # print([numb, numh, den])
-        # print([numb / den, numh / den])
-        # return upd
+        import mpmath as mp  # type:ignore
+        f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
+        fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
+        fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
+        boostMeanInt, hl0MeanInt = numb / den, numh / den
+
+        # second non-central moment
+        fh = lambda b, h: h**2 * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf])
+        fb = lambda b, h: b**2 * mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+        numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf])
+        boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
 
         mc = fullBinomialMonteCarlo(
             init.initHalflifePrior,
             init.boostPrior, [t for t in upd.elapseds[-1]], [r.successes for r in upd.results[-1]],
             [1 for t in upd.elapseds[-1]],
-            size=10_000_000)
-        print(f'{mc=}')
-        """
-        We see that Monte Carlo and quadrature agree on marginal posterior means of boost and init HL.
-        But joint/solo Ebisu does not.
-        At least for this simple case.
-        """
-        print('===')
+            size=1_000_000)
+
+        if True:
+          print(f'an={full.initHalflifePrior}; mc={mc["posteriorInitHl"]}')
+          print(
+              f'mean: an={ebisu._gammaToMean(*full.initHalflifePrior)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; int={hl0MeanInt}'
+          )
+          print(
+              f'VAR: an={_gammaToVar(*full.initHalflifePrior)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; int={hl0VarInt}'
+          )
+
+          print(f'an={full.boostPrior}; mc={mc["posteriorBoost"]}')
+          print(
+              f'mean: an={ebisu._gammaToMean(*full.boostPrior)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; int={boostMeanInt}'
+          )
+          print(
+              f'VAR: an={_gammaToVar(*full.boostPrior)}; mc={_gammaToVar(*mc["posteriorBoost"])}; int={boostVarInt}'
+          )
+
+        self.assertLess(
+            relativeError(
+                ebisu._gammaToMean(*full.initHalflifePrior),
+                ebisu._gammaToMean(*mc["posteriorInitHl"])),
+            0.1,
+            'analytical ~ monte carlo mean hl0',
+        )
+        self.assertLess(
+            relativeError(hl0MeanInt, ebisu._gammaToMean(*mc["posteriorInitHl"])),
+            0.005,
+            'numerical integration ~ monte carlo mean hl0',
+        )
+
+        self.assertLess(
+            relativeError(
+                ebisu._gammaToMean(*full.boostPrior), ebisu._gammaToMean(*mc["posteriorBoost"])),
+            0.1,
+            'analytical ~ monte carlo mean boost',
+        )
+        self.assertLess(
+            relativeError(boostMeanInt, ebisu._gammaToMean(*mc["posteriorBoost"])),
+            0.005,
+            'numerical integration ~ numerical integration mean boost',
+        )
         return upd
 
 
@@ -573,6 +611,9 @@ def vizPosterior(ret: ebisu.Model,
                  right=1.0,
                  fit2total=202,
                  weightPower=0.0):
+  import pylab as plt  #type:ignore
+  plt.ion()
+
   mc = fullBinomialMonteCarlo(
       ret.initHalflifePrior,
       ret.boostPrior,
@@ -713,25 +754,26 @@ def vizPosterior(ret: ebisu.Model,
   return dict(fig=fig, ax=ax, im=im, bestb=bestb, besth=besth, fit=fit, fit2=fit2, fitall=fitall)
 
 
-def flatten(list_of_lists):
-  "Flatten one level of nesting"
-  from itertools import chain
-  return chain.from_iterable(list_of_lists)
-
-
-def printModel(nextFull: ebisu.Model, nextSimple: ebisu.Model):
-  v = [
-      nextFull.currentHalflife / nextSimple.currentHalflife,
-      ebisu._gammaToMean(*nextFull.boostPrior),
-      ebisu._gammaToMean(*nextFull.initHalflifePrior),
-      ebisu._gammaToMean(*nextSimple.initHalflifePrior)
-  ]
-  print(
-      f'curr hl ratio={v[0]:0.3f}={nextFull.currentHalflife:0.3f}/{nextSimple.currentHalflife:.03f}, full mean hl0,boost={v[2]:0.3f},{v[1]:0.3f}, simp mean hl0={v[3]:0.3f}'
-  )
+def integrals(model):
+  import mpmath as mp  # type:ignore
+  f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
+  den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
+  fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
+  numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
+  fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
+  numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
+  return dict(meanXY=[numb / den, numh / den], vals=[numb, numh, den])
 
 
 if __name__ == '__main__':
+  import os
+  # get just this file's module name: no `.py` and no path
+  name = os.path.basename(__file__).replace(".py", "")
+  # unittest.TextTestRunner(failfast=True).run(unittest.TestLoader().loadTestsFromName(name))
+  t = TestEbisu()
+  t.test_full()
+
+if False:
   t = TestEbisu()
   upd = t.test_full()
   clean = replace(upd)
@@ -744,14 +786,10 @@ if __name__ == '__main__':
 
   rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
 
-  v = vizPosterior(upd, size=1_000_000, fit2total=2002, weightPower=1.0)
+  v = vizPosterior(upd, size=1_000_000, fit2total=2002, weightPower=0.0)
   print([f'{k}={v[k]["meanY"]}' for k in ['fitall', 'fit2', 'fit']])
+  print(integrals(upd))
   # v2 = vizPosterior(clean, size=100_000, fit2total=2002, weightPower=0.0)
-
-  import os
-  # get just this file's module name: no `.py` and no path
-  name = os.path.basename(__file__).replace(".py", "")
-  # unittest.TextTestRunner(failfast=True).run(unittest.TestLoader().loadTestsFromName(name))
 
   import utils
   df = utils.sqliteToDf('collection.anki2', True)
@@ -764,17 +802,9 @@ if __name__ == '__main__':
   data.results = [[ebisu.BinomialResult(1 if x >= 2 else 0, 1) for x in t.results]]
   data.startStrengths = [[1.0 for t in t.dts_hours]]
   datav = vizPosterior(data, size=1_000_000, fit2total=2002, weightPower=0.0)
-
-  def integrals(model):
-    import mpmath as mp  # type:ignore
-    f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
-    den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
-    fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
-    numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
-    fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
-    numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
-    return dict(meanXY=[numb / den, numh / den], vals=[numb, numh, den])
+  print([f'{k}={datav[k]["meanY"]}' for k in ['fitall', 'fit2', 'fit']])
 
   mom = integrals(data)
   print(mom)
-  print([f'{k}={datav[k]["meanY"]}' for k in ['fitall', 'fit2', 'fit']])
+
+  # datav2 = vizPosterior(data, size=1_000_000, fit2total=2002, weightPower=0.0, left=0.8)
