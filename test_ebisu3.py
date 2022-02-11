@@ -163,7 +163,7 @@ def fullBinomialMonteCarlo(
       statsInitHl=weightedMeanVarLogw(logweights, hl0s),
       # modeHl0=modeHl0,
       # corr=np.corrcoef(np.vstack([hl0s, hls, boosts])),
-      fit=fitJointTwoGammasWeighted(boosts, hl0s, w)
+      # fit=fitJointTwoGammasWeighted(boosts, hl0s, w)
       # posteriorCurrHl=posteriorCurrHl,
       # estb=estb,
       # esthl0=esthl0,
@@ -580,12 +580,13 @@ class TestEbisu(unittest.TestCase):
         boostMeanInt, hl0MeanInt = numb / den, numh / den
         boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
 
+        size = 100_000 if fraction < 9 else 300_000
         tic = time.perf_counter()
         mc = fullBinomialMonteCarlo(
             init.initHalflifePrior,
             init.boostPrior, [t for t in upd.elapseds[-1]], [r.successes for r in upd.results[-1]],
             [1 for t in upd.elapseds[-1]],
-            size=1_000_000)
+            size=size)
         toc = time.perf_counter()
         print(f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}")
 
@@ -628,7 +629,7 @@ class TestEbisu(unittest.TestCase):
         self.assertLess(
             relativeError(boostMeanInt, ebisu._gammaToMean(*mc["posteriorBoost"])),
             0.02,
-            f'numerical integration ~ numerical integration mean boost, {fraction=}, {result=}',
+            f'numerical integration ~ monte carlo mean boost, {fraction=}, {result=}',
         )
     return upd
 
