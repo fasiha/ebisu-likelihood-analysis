@@ -557,22 +557,22 @@ class TestEbisu(unittest.TestCase):
 
         @cache
         def posterior2d(b, h):
-          return ebisu._posterior(float(b), float(h), upd, 0.3, 1.0)
+          return mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
 
         method = 'gauss-legendre'
         maxdegree = 4 if fraction < 9 else 5
         tic = time.perf_counter()
-        f0 = lambda b, h: mp.exp(posterior2d(b, h))
+        f0 = lambda b, h: posterior2d(b, h)
         den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-        fb = lambda b, h: b * mp.exp(posterior2d(b, h))
+        fb = lambda b, h: b * posterior2d(b, h)
         numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-        fh = lambda b, h: h * mp.exp(posterior2d(b, h))
+        fh = lambda b, h: h * posterior2d(b, h)
         numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
 
         # second non-central moment
-        fh = lambda b, h: h**2 * mp.exp(posterior2d(b, h))
+        fh = lambda b, h: h**2 * posterior2d(b, h)
         numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-        fb = lambda b, h: b**2 * mp.exp(posterior2d(b, h))
+        fb = lambda b, h: b**2 * posterior2d(b, h)
         numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
         toc = time.perf_counter()
         print(f"Numerical integration: {toc - tic:0.4f} seconds")
