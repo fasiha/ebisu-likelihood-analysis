@@ -510,7 +510,7 @@ class TestEbisu(unittest.TestCase):
             # (we'll repeat the same thing in the test as in the code). That has to happen
             # via Stan?
 
-  def test_full(self):
+  def test_full(self, verbose=False):
     initHlMean = 10  # hours
     initHlBeta = 0.1
     initHlPrior = (initHlBeta * initHlMean, initHlBeta)
@@ -551,7 +551,8 @@ class TestEbisu(unittest.TestCase):
         full, fullDebug = ebisu.fullUpdateRecall(
             upd, left=left, size=10_000 if fraction < 9 else 20_000, debug=True)
         toc = time.perf_counter()
-        print(f"fullUpdateRecall: {toc - tic:0.4f} seconds, {fullDebug}")
+        if verbose:
+          print(f"fullUpdateRecall: {toc - tic:0.4f} seconds, {fullDebug}")
 
         @cache
         def posterior2d(b, h):
@@ -573,7 +574,8 @@ class TestEbisu(unittest.TestCase):
         fb = lambda b, h: b**2 * posterior2d(b, h)
         numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
         toc = time.perf_counter()
-        print(f"Numerical integration: {toc - tic:0.4f} seconds")
+        if verbose:
+          print(f"Numerical integration: {toc - tic:0.4f} seconds")
 
         boostMeanInt, hl0MeanInt = numb / den, numh / den
         boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
@@ -586,11 +588,12 @@ class TestEbisu(unittest.TestCase):
             [1 for t in upd.elapseds[-1]],
             size=size)
         toc = time.perf_counter()
-        print(
-            f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}, vars={mc['vars']}"
-        )
+        if verbose:
+          print(
+              f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}, vars={mc['vars']}"
+          )
 
-        if False:
+        if verbose:
           print(f'an={full.initHalflifePrior}; mc={mc["posteriorInitHl"]}')
           print(
               f'mean: an={ebisu._gammaToMean(*full.initHalflifePrior)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][0]}; int={hl0MeanInt}'
@@ -598,7 +601,7 @@ class TestEbisu(unittest.TestCase):
           print(
               f'VAR: an={_gammaToVar(*full.initHalflifePrior)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][1]}; int={hl0VarInt}'
           )
-        if False:
+        if verbose:
           print(f'an={full.boostPrior}; mc={mc["posteriorBoost"]}')
           print(
               f'mean: an={ebisu._gammaToMean(*full.boostPrior)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][0]}; int={boostMeanInt}'
@@ -612,12 +615,12 @@ class TestEbisu(unittest.TestCase):
                 relativeError(
                     np.array([full.boostPrior, full.initHalflifePrior]),
                     np.array([mc["posteriorBoost"], mc["posteriorInitHl"]]))),
-            .1,
+            .15,
             f'analytical ~ mc, {fraction=}, {result=}',
         )
         self.assertLess(
             relativeError(ebisu._gammaToMean(*full.initHalflifePrior), hl0MeanInt),
-            0.04,
+            0.05,
             f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}',
         )
         self.assertLess(
@@ -628,7 +631,7 @@ class TestEbisu(unittest.TestCase):
 
         self.assertLess(
             relativeError(ebisu._gammaToMean(*full.boostPrior), boostMeanInt),
-            0.04,
+            0.05,
             f'analytical ~ numerical integration mean boost, {fraction=}, {result=}',
         )
         self.assertLess(
@@ -805,9 +808,9 @@ if __name__ == '__main__':
   import os
   # get just this file's module name: no `.py` and no path
   name = os.path.basename(__file__).replace(".py", "")
-  # unittest.TextTestRunner(failfast=True).run(unittest.TestLoader().loadTestsFromName(name))
-  t = TestEbisu()
-  t.test_full()
+  unittest.TextTestRunner(failfast=True).run(unittest.TestLoader().loadTestsFromName(name))
+  # t = TestEbisu()
+  # t.test_full()
 
 if False:
   t = TestEbisu()
