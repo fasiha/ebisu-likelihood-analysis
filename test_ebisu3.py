@@ -19,6 +19,7 @@ from utils import sequentialImportanceResample
 import time
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
+weightedGammaEstimate = ebisu._weightedGammaEstimate
 
 
 def _gammaToVar(alpha: float, beta: float) -> float:
@@ -173,22 +174,6 @@ def fullBinomialMonteCarlo(
       # esthl=esthl,
       vars=vars,
   )
-
-
-def kishLog(logweights) -> float:
-  "kish effective sample fraction, given log-weights"
-  return np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / logweights.size
-
-
-def weightedGammaEstimate(h, w):
-  """
-  See https://en.wikipedia.org/w/index.php?title=Gamma_distribution&oldid=1067698046#Closed-form_estimators
-  """
-  wsum = math.fsum(w)
-  that2 = np.sum(w * h * np.log(h)) / wsum - np.sum(w * h) / wsum * np.sum(w * np.log(h)) / wsum
-  khat2 = np.sum(w * h) / wsum / that2
-  fit = (khat2, 1 / that2)
-  return fit
 
 
 def clampLerp(x1: np.ndarray, x2: np.ndarray, y1: np.ndarray, y2: np.ndarray, x: float):
@@ -563,19 +548,10 @@ class TestEbisu(unittest.TestCase):
           ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
 
         tic = time.perf_counter()
-        full = ebisu.fullUpdateRecall(upd, left=left)
+        full, fullDebug = ebisu.fullUpdateRecall(
+            upd, left=left, size=10_000 if fraction < 9 else 20_000, debug=True)
         toc = time.perf_counter()
-        print(f"fullUpdateRecall: {toc - tic:0.4f} seconds")
-
-        logposterior = lambda x, y: ebisu._posterior(x, y, upd, 0.3, 1.0)
-        tic = time.perf_counter()
-        improv = monteCarloImprove(
-            full.boostPrior,
-            full.initHalflifePrior,
-            logposterior,
-            size=10_000 if fraction < 9 else 30_000)
-        toc = time.perf_counter()
-        print(f"monteCarloImprove: {toc - tic:0.4f} seconds, {improv}")
+        print(f"fullUpdateRecall: {toc - tic:0.4f} seconds, {fullDebug}")
 
         @cache
         def posterior2d(b, h):
@@ -602,7 +578,7 @@ class TestEbisu(unittest.TestCase):
         boostMeanInt, hl0MeanInt = numb / den, numh / den
         boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
 
-        size = 100_000 if fraction < 9 else 300_000
+        size = 300_000 if fraction < 9 else 1_500_000
         tic = time.perf_counter()
         mc = fullBinomialMonteCarlo(
             init.initHalflifePrior,
@@ -634,64 +610,33 @@ class TestEbisu(unittest.TestCase):
         self.assertLess(
             np.max(
                 relativeError(
-                    np.array([improv['x'], improv['y']]),
+                    np.array([full.boostPrior, full.initHalflifePrior]),
                     np.array([mc["posteriorBoost"], mc["posteriorInitHl"]]))),
             .1,
-            f'improv ~ mc, {fraction=}, {result=}',
+            f'analytical ~ mc, {fraction=}, {result=}',
         )
         self.assertLess(
-            relativeError(
-                ebisu._gammaToMean(*full.initHalflifePrior),
-                ebisu._gammaToMean(*mc["posteriorInitHl"])),
-            0.15,
-            f'analytical ~ monte carlo mean hl0, {fraction=}, {result=}',
-        )
-        self.assertLess(
-            relativeError(hl0MeanInt, ebisu._gammaToMean(*mc["posteriorInitHl"])),
+            relativeError(ebisu._gammaToMean(*full.initHalflifePrior), hl0MeanInt),
             0.04,
-            f'numerical integration ~ monte carlo mean hl0, {fraction=}, {result=}',
+            f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}',
+        )
+        self.assertLess(
+            relativeError(ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt),
+            0.04,
+            f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}',
         )
 
         self.assertLess(
-            relativeError(
-                ebisu._gammaToMean(*full.boostPrior), ebisu._gammaToMean(*mc["posteriorBoost"])),
-            0.15,
-            f'analytical ~ monte carlo mean boost, {fraction=}, {result=}',
+            relativeError(ebisu._gammaToMean(*full.boostPrior), boostMeanInt),
+            0.04,
+            f'analytical ~ numerical integration mean boost, {fraction=}, {result=}',
         )
         self.assertLess(
-            relativeError(boostMeanInt, ebisu._gammaToMean(*mc["posteriorBoost"])),
+            relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt),
             0.02,
-            f'numerical integration ~ monte carlo mean boost, {fraction=}, {result=}',
+            f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}',
         )
     return upd
-
-
-def monteCarloImprove(xprior: tuple[float, float],
-                      yprior: tuple[float, float],
-                      logposterior: Callable[[float, float], float],
-                      size=10_000):
-  x = gammarv.rvs(xprior[0], scale=1 / xprior[1], size=size)
-  y = gammarv.rvs(yprior[0], scale=1 / yprior[1], size=size)
-  f = np.vectorize(logposterior)
-  logp = f(x, y)
-  logw = logp - (
-      gammarv.logpdf(x, xprior[0], scale=1 / xprior[1]) +
-      gammarv.logpdf(y, yprior[0], scale=1 / yprior[1]))
-  w = np.exp(logw)
-  estx = weightedGammaEstimate(x, w)
-  esty = weightedGammaEstimate(y, w)
-  vars = []
-  if True:
-    vars = [np.std(w * v) for v in [x, y]]
-  return dict(
-      x=estx,
-      y=esty,
-      meanXY=[ebisu._gammaToMean(*estx), ebisu._gammaToMean(*esty)],
-      statsx=weightedMeanVarLogw(logw, x),
-      statsy=weightedMeanVarLogw(logw, y),
-      kish=kishLog(logw),
-      vars=vars,
-  )
 
 
 def vizPosterior(ret: ebisu.Model,

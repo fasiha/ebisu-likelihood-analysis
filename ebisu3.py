@@ -7,7 +7,7 @@ from scipy.special import kv, kve, gammaln, gamma, betaln, logsumexp  #type: ign
 from dataclasses import dataclass, replace
 from time import time_ns
 from functools import cache
-from typing import Union
+from typing import Union, Callable
 
 
 @dataclass
@@ -261,7 +261,7 @@ def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
   return (y1 * (1 - mu) + y2 * mu)
 
 
-def _posterior(b: float, h: float, ret: Model, left: float, right: float):
+def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=False):
   "log posterior up to a constant offset"
   ab, bb = ret.boostPrior
   ah, bh = ret.initHalflifePrior
@@ -292,6 +292,8 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float):
       else:
         loglik.append(np.log(-np.expm1(logPrecall)))
   logposterior = fsum(loglik + [logprior])
+  if extra:
+    return logposterior, dict(currentHalflife=currHalflife)
   return logposterior
 
 
@@ -329,11 +331,11 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
 def fullUpdateRecall(
     model: Model,
     now: Union[None, float] = None,
-    q0: Union[None, float] = None,
-    reinforcement: float = 1.0,
     left=0.3,
     right=1.0,
-) -> Model:
+    size=10_000,
+    debug=False,
+) -> Union[Model, tuple[Model, dict]]:
   ret = replace(model)
   # assume this is done outside # _appendQuiz(ret, elapsed, res, reinforcement)
 
@@ -364,19 +366,65 @@ def fullUpdateRecall(
   filt = lambda v: [x for x, p in zip(v, posteriors) if p >= maxposterior - cutoff]
   fit = _fitJointToTwoGammas(filt(bs), filt(hs), filt(posteriors), weightPower=0.0)
 
+  betterFit = _monteCarloImprove((fit['alphax'], fit['betax']), (fit['alphay'], fit['betay']),
+                                 posterior2d,
+                                 size=size,
+                                 debug=debug)
+
   # update prior(s)
-  ret.boostPrior = (fit['alphax'], fit['betax'])
-  ret.initHalflifePrior = (fit['alphay'], fit['betay'])
+  ret.boostPrior = (betterFit['alphax'], betterFit['betax'])
+  ret.initHalflifePrior = (betterFit['alphay'], betterFit['betay'])
   # update SQL-friendly scalars
   bmean, hmean = [_gammaToMean(*prior) for prior in [ret.boostPrior, ret.initHalflifePrior]]
-  futureHalflife = -1  # TODO FIXME
-  if reinforcement > 0:
-    ret.currentHalflife = futureHalflife
-    ret.startTime = now or _timeMs()
-    ret.logStrength = np.log(reinforcement)
-  else:
-    ret.currentHalflife = futureHalflife
+  _, extra = _posterior(bmean, hmean, ret, left, right, extra=True)
+  ret.currentHalflife = extra['currentHalflife']
+  if debug:
+    return ret, dict(kish=betterFit['kish'], stds=betterFit['stds'])
   return ret
+
+
+def _monteCarloImprove(xprior: tuple[float, float],
+                       yprior: tuple[float, float],
+                       logposterior: Callable[[float, float], float],
+                       size=10_000,
+                       debug=False):
+  x = gammarv.rvs(xprior[0], scale=1 / xprior[1], size=size)
+  y = gammarv.rvs(yprior[0], scale=1 / yprior[1], size=size)
+  f = np.vectorize(logposterior, otypes=[float])
+  logp = f(x, y)
+  logw = logp - (
+      gammarv.logpdf(x, xprior[0], scale=1 / xprior[1]) +
+      gammarv.logpdf(y, yprior[0], scale=1 / yprior[1]))
+  w = np.exp(logw)
+  alphax, betax = _weightedGammaEstimate(x, w)
+  alphay, betay = _weightedGammaEstimate(y, w)
+  return dict(
+      x=[alphax, betax],
+      y=[alphay, betay],
+      alphax=alphax,
+      betax=betax,
+      alphay=alphay,
+      betay=betay,
+      kish=_kishLog(logw) if debug else -1,
+      stds=[np.std(w * v) for v in [x, y]] if debug else [],
+  )
+
+
+def _weightedGammaEstimate(h, w):
+  """
+  See https://en.wikipedia.org/w/index.php?title=Gamma_distribution&oldid=1067698046#Closed-form_estimators
+  """
+  wsum = fsum(w)
+  whsum = fsum(w * h)
+  that2 = np.sum(w * h * np.log(h)) / wsum - whsum / wsum * np.sum(w * np.log(h)) / wsum
+  khat2 = whsum / wsum / that2
+  fit = (khat2, 1 / that2)
+  return fit
+
+
+def _kishLog(logweights) -> float:
+  "kish effective sample fraction, given log-weights"
+  return np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / logweights.size
 
 
 def _predictRecall(model: Model, elapsedHours=None, logDomain=True) -> float:
