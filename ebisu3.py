@@ -300,7 +300,7 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=
 def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
                          y: Union[list[float], np.ndarray],
                          logPosterior: Union[list[float], np.ndarray],
-                         weightPower=1.0) -> dict:
+                         weightPower=0.0) -> dict:
   # four-dimensional weighted least squares
   x = np.array(x)
   y = np.array(y)
@@ -330,41 +330,44 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
 
 def fullUpdateRecall(
     model: Model,
-    now: Union[None, float] = None,
     left=0.3,
     right=1.0,
     size=10_000,
     debug=False,
 ) -> Union[Model, tuple[Model, dict]]:
   ret = replace(model)
-  # assume this is done outside # _appendQuiz(ret, elapsed, res, reinforcement)
-
-  posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
-
-  MIN_BOOST = 1.0
   ab, bb = ret.boostPrior
   ah, bh = ret.initHalflifePrior
-  maxBoost = gammarv.ppf(0.9999, ab, scale=1.0 / bb)
+  minBoost, maxBoost = gammarv.ppf([.01, 0.9999], ab, scale=1.0 / bb)
   minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
-  opt = shgo(lambda x: -posterior2d(x[0], x[1]), [(MIN_BOOST, maxBoost),
-                                                  (minHalflife, maxHalflife)])
-  bestb, besth = opt.x
 
-  bs: list[float] = []
-  hs: list[float] = []
-  posteriors: list[float] = []
-  for b in np.linspace(MIN_BOOST, maxBoost, 201):
-    posteriors.append(posterior2d(b, besth))
-    bs.append(b)
-    hs.append(besth)
-  for h in np.linspace(minHalflife, maxHalflife, 201):
-    posteriors.append(posterior2d(bestb, h))
-    bs.append(bestb)
-    hs.append(h)
-  cutoff = 3  # logposteriors within this of the peak will be fit
-  maxposterior = max(posteriors)
-  filt = lambda v: [x for x, p in zip(v, posteriors) if p >= maxposterior - cutoff]
-  fit = _fitJointToTwoGammas(filt(bs), filt(hs), filt(posteriors), weightPower=0.0)
+  posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
+  if True:
+    bs, hs = np.random.rand(2, 400)
+    bs = bs * (maxBoost - minBoost) + minBoost
+    hs = hs * (maxHalflife - minHalflife) + minHalflife
+    posteriors = np.vectorize(posterior2d, [float])(bs, hs)
+    fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=1.0)
+  else:
+    opt = shgo(lambda x: -posterior2d(x[0], x[1]), [(minBoost, maxBoost),
+                                                    (minHalflife, maxHalflife)])
+    bestb, besth = opt.x
+
+    bs = []
+    hs = []
+    posteriors = []
+    for b in np.linspace(minBoost, maxBoost, 201):
+      posteriors.append(posterior2d(b, besth))
+      bs.append(b)
+      hs.append(besth)
+    for h in np.linspace(minHalflife, maxHalflife, 201):
+      posteriors.append(posterior2d(bestb, h))
+      bs.append(bestb)
+      hs.append(h)
+    cutoff = 3  # logposteriors within this of the peak will be fit
+    maxposterior = max(posteriors)
+    filt = lambda v: [x for x, p in zip(v, posteriors) if p >= maxposterior - cutoff]
+    fit = _fitJointToTwoGammas(filt(bs), filt(hs), filt(posteriors), weightPower=0.0)
 
   betterFit = _monteCarloImprove((fit['alphax'], fit['betax']), (fit['alphay'], fit['betay']),
                                  posterior2d,

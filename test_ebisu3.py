@@ -444,8 +444,7 @@ class TestEbisu(unittest.TestCase):
           ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
 
         tic = time.perf_counter()
-        full, fullDebug = ebisu.fullUpdateRecall(
-            upd, left=left, size=10_000 if fraction < 9 else 20_000, debug=True)
+        full, fullDebug = ebisu.fullUpdateRecall(upd, left=left, size=10_000, debug=True)
         toc = time.perf_counter()
         if verbose:
           print(f"fullUpdateRecall: {toc - tic:0.4f} seconds, {fullDebug}")
