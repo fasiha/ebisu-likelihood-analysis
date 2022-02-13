@@ -1,7 +1,6 @@
 from scipy.linalg import lstsq  #type:ignore
 from math import fsum
 import numpy as np  # type:ignore
-from scipy.optimize import shgo  #type: ignore
 from scipy.stats import gamma as gammarv  # type: ignore
 from scipy.special import kv, kve, gammaln, gamma, betaln, logsumexp  #type: ignore
 from dataclasses import dataclass, replace
@@ -342,32 +341,11 @@ def fullUpdateRecall(
   minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
 
   posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
-  if True:
-    bs, hs = np.random.rand(2, 400)
-    bs = bs * (maxBoost - minBoost) + minBoost
-    hs = hs * (maxHalflife - minHalflife) + minHalflife
-    posteriors = np.vectorize(posterior2d, [float])(bs, hs)
-    fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=1.0)
-  else:
-    opt = shgo(lambda x: -posterior2d(x[0], x[1]), [(minBoost, maxBoost),
-                                                    (minHalflife, maxHalflife)])
-    bestb, besth = opt.x
-
-    bs = []
-    hs = []
-    posteriors = []
-    for b in np.linspace(minBoost, maxBoost, 201):
-      posteriors.append(posterior2d(b, besth))
-      bs.append(b)
-      hs.append(besth)
-    for h in np.linspace(minHalflife, maxHalflife, 201):
-      posteriors.append(posterior2d(bestb, h))
-      bs.append(bestb)
-      hs.append(h)
-    cutoff = 3  # logposteriors within this of the peak will be fit
-    maxposterior = max(posteriors)
-    filt = lambda v: [x for x, p in zip(v, posteriors) if p >= maxposterior - cutoff]
-    fit = _fitJointToTwoGammas(filt(bs), filt(hs), filt(posteriors), weightPower=0.0)
+  bs, hs = np.random.rand(2, 400)
+  bs = bs * (maxBoost - minBoost) + minBoost
+  hs = hs * (maxHalflife - minHalflife) + minHalflife
+  posteriors = np.vectorize(posterior2d, [float])(bs, hs)
+  fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=1.0)
 
   betterFit = _monteCarloImprove((fit['alphax'], fit['betax']), (fit['alphay'], fit['betay']),
                                  posterior2d,
