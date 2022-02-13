@@ -26,99 +26,6 @@ def _gammaToVar(alpha: float, beta: float) -> float:
   return alpha / beta**2
 
 
-def fitJointTwoGammas(x, y):
-  sumlogs = [np.sum(np.log(v)) for v in [x, y]]
-  means = [np.mean(v) for v in [x, y]]
-  n = len(x)
-  loglik1 = lambda k, sumlog, mean: (
-      (k - 1) * sumlog - n * k - n * k * np.log(mean / k) - n * loggamma(k))
-  loglik = lambda ks: loglik1(ks[0], sumlogs[0], means[0]) + loglik1(ks[1], sumlogs[1], means[1])
-  sol = shgo(lambda ks: -loglik(ks), [(0.01, 50)] * 2)
-  kx, ky = sol.x
-  thetax, thetay = np.array(means) / sol.x
-
-  alphax, alphay = [kx, ky]
-  betax, betay = [1 / thetax, 1 / thetay]
-
-  return dict(
-      sol=sol,
-      alphax=alphax,
-      betax=betax,
-      alphay=alphay,
-      betay=betay,
-      meanX=ebisu._gammaToMean(alphax, betax),
-      meanY=ebisu._gammaToMean(alphay, betay),
-  )
-
-
-def fitJointTwoGammasWeighted2(x, y, w):
-  "2D search via fixing theta in terms of k"
-  wsum = math.fsum(w)
-
-  meanlogs = [math.fsum(w * np.log(v)) / wsum for v in [x, y]]
-  means = [math.fsum(w * v) / wsum for v in [x, y]]
-  n = len(x)
-  loglik1 = lambda k, meanlog, mean: (
-      (k - 1) * n * meanlog - n * k - n * k * np.log(mean / k) - n * loggamma(k))
-  loglik = lambda ks: loglik1(ks[0], meanlogs[0], means[0]) + loglik1(ks[1], meanlogs[1], means[1])
-  sol = shgo(lambda ks: -loglik(ks), [(0.01, 50)] * 2)
-  kx, ky = sol.x
-  thetax, thetay = np.array(means) / sol.x
-
-  alphax, alphay = [kx, ky]
-  betax, betay = [1 / thetax, 1 / thetay]
-
-  return dict(
-      sol=sol,
-      alphax=alphax,
-      betax=betax,
-      alphay=alphay,
-      betay=betay,
-      meanX=ebisu._gammaToMean(alphax, betax),
-      meanY=ebisu._gammaToMean(alphay, betay),
-  )
-
-
-def fitJointTwoGammasWeighted(x, y, w):
-  "4D search"
-  wsum = math.fsum(w)
-
-  meanlogs = [math.fsum(w * np.log(v)) / wsum for v in [x, y]]
-  means = [math.fsum(w * v) / wsum for v in [x, y]]
-  # divide through by n=len(x):
-  loglik1 = lambda k, t, meanlog, mean: (k - 1) * meanlog - mean / t - k * np.log(t) - loggamma(k)
-  loglik = lambda kts: (
-      loglik1(kts[0], kts[1], meanlogs[0], means[0]) + loglik1(kts[2], kts[3], meanlogs[1], means[1]
-                                                              ))
-  if False:
-    sol = shgo(lambda x: -loglik(x), [(0.01, 50)] * 4)
-    kx, thetax, ky, thetay = sol.x
-    alphax, alphay = [kx, ky]
-    betax, betay = [1 / thetax, 1 / thetay]
-  else:
-    # convert alpha/beta Gamma parameterization to k/theta: k=alpha, beta=1/theta
-    fits = [weightedGammaEstimate(v, w) for v in [x, y]]
-    init = np.array([fits[0][0], 1 / fits[0][1], fits[1][0], 1 / fits[1][1]])
-    bounds = [(0, np.inf)] * 4
-
-    sol = minimize(lambda x: -loglik(x), init, bounds=bounds, method='Nelder-Mead')
-    # Weird, shgo doesn't converge (picks the mid-point of bounds) but Nelder-Mead does much better
-    # But point remains the that ML-fitting the posterior samples to bivariate independent Gamma
-    alphax = sol.x[0]
-    betax = 1 / sol.x[1]
-    alphay = sol.x[2]
-    betay = 1 / sol.x[3]
-  return dict(
-      sol=sol,
-      alphax=alphax,
-      betax=betax,
-      alphay=alphay,
-      betay=betay,
-      meanXY=[ebisu._gammaToMean(alphax, betax),
-              ebisu._gammaToMean(alphay, betay)],
-  )
-
-
 def fullBinomialMonteCarlo(
     hlPrior: tuple[float, float],
     bPrior: tuple[float, float],
@@ -148,14 +55,9 @@ def fullBinomialMonteCarlo(
       hls *= clampLerp(left * hls, hls, np.minimum(boosts, 1.0), boosts, t)
 
   kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / size
-  # posteriorBoost = weightedMeanLogw(logweights, boosts)
-  # posteriorInitHl = weightedMeanLogw(logweights, hl0s)
-  # posteriorCurrHl = weightedMeanLogw(logweights, hls)
-  # sisHl0s = sequentialImportanceResample(hl0s, w)[0]
   w = np.exp(logweights)
   estb = weightedGammaEstimate(boosts, w)
   esthl0 = weightedGammaEstimate(hl0s, w)
-  # esthl = ebisu._gammaToMean(*weightedGammaEstimate(hls, w))
   vars = []
   if True:
     vars = [np.std(w * v) for v in [boosts, hl0s]]
@@ -167,7 +69,6 @@ def fullBinomialMonteCarlo(
       statsInitHl=weightedMeanVarLogw(logweights, hl0s),
       # modeHl0=modeHl0,
       # corr=np.corrcoef(np.vstack([hl0s, hls, boosts])),
-      # fit=fitJointTwoGammasWeighted(boosts, hl0s, w)
       # posteriorCurrHl=posteriorCurrHl,
       # estb=estb,
       # esthl0=esthl0,
@@ -187,11 +88,6 @@ def clampLerp(x1: np.ndarray, x2: np.ndarray, y1: np.ndarray, y2: np.ndarray, x:
   idx = np.logical_and(x1 <= x, x <= x2)
   ret[idx] = (y1 * (1 - mu) + y2 * mu)[idx]
   return ret
-
-
-def weightedMeanLogw(logw: np.ndarray, x: np.ndarray) -> np.ndarray:
-  # [weightedMean] https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Mathematical_definition
-  return np.exp(logsumexp(logw, b=x) - logsumexp(logw))
 
 
 def weightedMeanVarLogw(logw: np.ndarray, x: np.ndarray) -> tuple[float, float]:
@@ -642,208 +538,8 @@ class TestEbisu(unittest.TestCase):
     return upd
 
 
-def vizPosterior(ret: ebisu.Model,
-                 size=10_000_000,
-                 left=0.3,
-                 right=1.0,
-                 fit2total=202,
-                 weightPower=0.0):
-  import pylab as plt  #type:ignore
-  plt.ion()
-
-  mc = fullBinomialMonteCarlo(
-      ret.initHalflifePrior,
-      ret.boostPrior,
-      [t for t in ret.elapseds[-1]],
-      [r.successes for r in ret.results[-1]],
-      [1 for t in ret.elapseds[-1]],
-      size=size,
-  )
-  print(f'{mc=}')
-
-  MIN_BOOST = 1.0
-  ab, bb = ret.boostPrior
-  ah, bh = ret.initHalflifePrior
-  minBoost, midBoost, maxBoost = gammarv.ppf([.01, 0.7, 0.9999], ab, scale=1.0 / bb)
-  minHalflife, midHalflife, maxHalflife = gammarv.ppf([0.01, 0.7, 0.9999], ah, scale=1.0 / bh)
-  bvec = np.linspace(minBoost, maxBoost, 101)
-  hvec = np.linspace(minHalflife, maxHalflife, 101)
-  bmat, hmat = np.meshgrid(bvec, hvec)
-
-  posterior2d = lambda b, h: ebisu._posterior(b, h, ret, left, right)
-
-  z = np.vectorize(posterior2d)(bmat, hmat)
-  opt = shgo(lambda x: -posterior2d(x[0], x[1]), [(MIN_BOOST, maxBoost),
-                                                  (minHalflife, maxHalflife)])
-  bestb, besth = opt.x
-
-  peak = np.max(z)
-  cutoff = peak - 10
-  idx = z.ravel() > cutoff
-  fitall = ebisu._fitJointToTwoGammas(
-      bmat.ravel()[idx], hmat.ravel()[idx], z.ravel()[idx], weightPower=1.0)
-  print(f'size={bmat.ravel()[idx].size}')
-  fitall['meanX'] = ebisu._gammaToMean(fitall['alphax'], fitall['betax'])
-  fitall['meanY'] = ebisu._gammaToMean(fitall['alphay'], fitall['betay'])
-
-  def mkfit(maxBoost, maxHalflife, nb=201, nh=201, weightPower=0.0):
-    bs = []
-    hs = []
-    posteriors = []
-    bvec = np.linspace(MIN_BOOST, maxBoost, nb)
-    for b in bvec:
-      posteriors.append(posterior2d(b, besth))
-      bs.append(b)
-      hs.append(besth)
-    hvec = np.linspace(minHalflife, maxHalflife, nh)
-    for h in hvec:
-      posteriors.append(posterior2d(bestb, h))
-      bs.append(bestb)
-      hs.append(h)
-
-    if True:  # if omit tiny posteriors
-      maxp = np.max(posteriors)
-      cutoff = 6
-      bs, hs, posteriors = zip(
-          *[(b, h, p) for b, h, p in zip(bs, hs, posteriors) if p > (maxp - cutoff)])
-    print(f'cutoff len={len(bs)}')
-    fit = ebisu._fitJointToTwoGammas(bs, hs, posteriors, weightPower=weightPower)
-    fit['meanX'] = ebisu._gammaToMean(fit['alphax'], fit['betax'])
-    fit['meanY'] = ebisu._gammaToMean(fit['alphay'], fit['betay'])
-    fit['varX'] = _gammaToVar(fit['alphax'], fit['betax'])
-    fit['varY'] = _gammaToVar(fit['alphay'], fit['betay'])
-
-    if True:
-      remmax = lambda v: np.array(v) - np.max(v)
-      fig, ax = plt.subplots(2, 1)
-      ax[0].plot(
-          bvec,
-          remmax([posterior2d(b, besth) for b in bvec]),
-          marker='.',
-          label='analytical posterior')
-      ax[0].plot(
-          bvec,
-          remmax(gammarv.logpdf(bvec, fit['alphax'], scale=1 / fit['betax'])),
-          marker='.',
-          linestyle='--',
-          label='posterior curve fit')
-      ax[0].plot(
-          bvec,
-          remmax(gammarv.logpdf(bvec, mc['fit']['alphax'], scale=1 / mc['fit']['betax'])),
-          marker='.',
-          label='Monte Carlo fit')
-      ax[0].legend()
-
-      ax[1].plot(
-          hvec,
-          remmax([posterior2d(bestb, h) for h in hvec]),
-          marker='.',
-          label='analytical posterior')
-      ax[1].plot(
-          hvec,
-          remmax(gammarv.logpdf(hvec, fit['alphay'], scale=1 / fit['betay'])),
-          marker='.',
-          linestyle='--',
-          label='posterior curve fit')
-      ax[1].plot(
-          hvec,
-          remmax(gammarv.logpdf(hvec, mc['fit']['alphay'], scale=1 / mc['fit']['betay'])),
-          marker='.',
-          label='Monte Carlo fit')
-      ax[1].legend()
-
-    return fit
-
-  def mkfit2(maxBoost, maxHalflife, total=202):
-    bvec = np.linspace(MIN_BOOST, maxBoost, 101)
-    hvec = np.linspace(minHalflife, maxHalflife, 101)
-
-    bs = np.random.rand(total) * (maxBoost - MIN_BOOST) + MIN_BOOST
-    hs = np.random.rand(total) * (maxHalflife - minHalflife) + minHalflife
-
-    bs = np.hstack([bs, bvec])
-    hs = np.hstack([hs, hvec])
-
-    posteriors = np.vectorize(posterior2d)(bs, hs)
-    fit = ebisu._fitJointToTwoGammas(bs, hs, posteriors, weightPower=3.0)
-    fit['meanX'] = ebisu._gammaToMean(fit['alphax'], fit['betax'])
-    fit['meanY'] = ebisu._gammaToMean(fit['alphay'], fit['betay'])
-    return fit
-
-  rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
-
-  def imshow(x, y, z, ax=plt):
-
-    def extents(f):
-      delta = f[1] - f[0]
-      return [f[0] - delta / 2, f[-1] + delta / 2]
-
-    return ax.imshow(
-        z, aspect='auto', interpolation='none', extent=extents(x) + extents(y), origin='lower')
-
-  fig, ax = plt.subplots()
-  im = imshow(bvec, hvec, z, ax=ax)
-  ax.set_xlabel('boost')
-  ax.set_ylabel('init halflife')
-  fig.colorbar(im)
-  rescalec(im, 20)
-
-  fit = mkfit(maxBoost, maxHalflife, weightPower=weightPower)
-  fit2 = mkfit2(maxBoost, maxHalflife, total=fit2total)
-  return dict(fig=fig, ax=ax, im=im, bestb=bestb, besth=besth, fit=fit, fit2=fit2, fitall=fitall)
-
-
-def integrals(model):
-  import mpmath as mp  # type:ignore
-  f0 = lambda b, h: mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
-  den = mp.quad(f0, [0, mp.inf], [0, mp.inf])
-  fb = lambda b, h: b * mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
-  numb = mp.quad(fb, [0, mp.inf], [0, mp.inf])
-  fh = lambda b, h: h * mp.exp(ebisu._posterior(float(b), float(h), model, 0.3, 1.0))
-  numh = mp.quad(fh, [0, mp.inf], [0, mp.inf])
-  return dict(meanXY=[numb / den, numh / den], vals=[numb, numh, den])
-
-
 if __name__ == '__main__':
   import os
   # get just this file's module name: no `.py` and no path
   name = os.path.basename(__file__).replace(".py", "")
   unittest.TextTestRunner(failfast=True).run(unittest.TestLoader().loadTestsFromName(name))
-  # t = TestEbisu()
-  # t.test_full()
-
-if False:
-  t = TestEbisu()
-  upd = t.test_full()
-  clean = replace(upd)
-  clean.elapseds = [[]]
-  clean.results = [[]]
-  clean.startStrengths = [[]]
-  from scipy.optimize import shgo  # type: ignore
-  import pylab as plt  #type:ignore
-  plt.ion()
-
-  rescalec = lambda im, top: im.set_clim(im.get_clim()[1] - np.array([top, 0]))
-
-  v = vizPosterior(upd, size=1_000_000, fit2total=2002, weightPower=0.0)
-  print({k: v['fit'][k] for k in v['fit'] if k != "sol"})
-  print(integrals(upd))
-  # print([f'{k}={v[k]["meanY"]}' for k in ['fitall', 'fit2', 'fit']])
-  # v2 = vizPosterior(clean, size=100_000, fit2total=2002, weightPower=0.0)
-  import utils
-  df = utils.sqliteToDf('collection.anki2', True)
-  print(f'loaded SQL data, {len(df)} rows')
-  train, TEST_TRAIN = utils.traintest(df)
-
-  t = train[10]
-  data = replace(clean)
-  data.elapseds = [[t for t in t.dts_hours]]
-  data.results = [[ebisu.BinomialResult(1 if x >= 2 else 0, 1) for x in t.results]]
-  data.startStrengths = [[1.0 for t in t.dts_hours]]
-  datav = vizPosterior(data, size=1_000_000, fit2total=2002, weightPower=0.0)
-  print([f'{k}={datav[k]["meanY"]}' for k in ['fitall', 'fit2', 'fit']])
-
-  mom = integrals(data)
-  print(mom)
-
-  # datav2 = vizPosterior(data, size=1_000_000, fit2total=2002, weightPower=0.0, left=0.8)
