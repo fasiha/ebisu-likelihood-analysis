@@ -261,41 +261,6 @@ def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
   return (y1 * (1 - mu) + y2 * mu)
 
 
-def _makeLogPrecalls_Halflives(b: float,
-                               h: float,
-                               results: list[Result],
-                               elapseds: list[float],
-                               startStrengths: list[float],
-                               left=0.3,
-                               right=1.0) -> list[tuple[float, float]]:
-  maxb = b
-  from itertools import accumulate
-  from typing import TypedDict
-
-  class Reduced(TypedDict):
-    h: float  # halflife for NEXT quiz
-    r: float
-    t0: float
-    logp: float
-
-  def reduction(prev: Reduced, curr: tuple[Result, float, float]) -> Reduced:
-    res, t, r = curr
-    logp = -(t + prev["t0"]) / prev["h"] * LN2 + (np.log(prev["r"]) if prev["r"] > 0 else 0)
-
-    if success(res) and r > 0:
-      newh = prev["h"] * _clampLerp2(left * prev["h"], right * prev["h"], min(b, 1.0), maxb, t)
-    else:
-      newh = prev["h"]
-
-    t0 = 0 if r > 0 else prev["t0"] + t
-    return Reduced(h=newh, r=r, t0=t0, logp=logp)
-
-  init: Reduced = dict(h=h, r=1.0, t0=0.0, logp=1)
-  acc = accumulate(zip(results, elapseds, startStrengths), reduction, initial=init)
-  next(acc)  # skip initial
-  return [(a["logp"], a["h"]) for a in acc]
-
-
 def _posterior(b: float, h: float, ret: Model, left: float, right: float):
   "log posterior up to a constant offset"
   ab, bb = ret.boostPrior
@@ -304,11 +269,11 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float):
   logb = np.log(b)
   logh = np.log(h)
   logprior = -bb * b - bh * h + (ab - 1) * logb + (ah - 1) * logh
-  logpHls = _makeLogPrecalls_Halflives(
-      b, h, ret.results[-1], ret.elapseds[-1], ret.startStrengths[-1], left=left, right=right)
 
   loglik = []
-  for (res, (logPrecall, _halflife)) in zip(ret.results[-1], logpHls):
+  currHalflife = h
+  for (res, e) in zip(ret.results[-1], ret.elapseds[-1]):
+    logPrecall = -e / currHalflife * LN2
     if isinstance(res, NoisyBinaryResult):
       # noisy binary/Bernoulli
       logPfail = np.log(-np.expm1(logPrecall))
@@ -316,12 +281,14 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float):
       if z:
         # Stan has this nice function, log_mix, which is perfect for this...
         loglik.append(logsumexp([logPrecall + np.log(res.q1), logPfail + np.log(res.q0)]))
+        currHalflife *= _clampLerp2(left * currHalflife, right * currHalflife, min(b, 1.0), b, e)
       else:
         loglik.append(logsumexp([logPrecall + np.log(1 - res.q1), logPfail + np.log(1 - res.q0)]))
     else:
       # binomial
       if success(res):
         loglik.append(logPrecall)
+        currHalflife *= _clampLerp2(left * currHalflife, right * currHalflife, min(b, 1.0), b, e)
       else:
         loglik.append(np.log(-np.expm1(logPrecall)))
   logposterior = fsum(loglik + [logprior])
@@ -402,14 +369,7 @@ def fullUpdateRecall(
   ret.initHalflifePrior = (fit['alphay'], fit['betay'])
   # update SQL-friendly scalars
   bmean, hmean = [_gammaToMean(*prior) for prior in [ret.boostPrior, ret.initHalflifePrior]]
-  futureHalflife = _makeLogPrecalls_Halflives(
-      bmean,
-      hmean,
-      ret.results[-1],
-      ret.elapseds[-1],
-      ret.startStrengths[-1],
-      left=left,
-      right=right)[-1][1]
+  futureHalflife = -1  # TODO FIXME
   if reinforcement > 0:
     ret.currentHalflife = futureHalflife
     ret.startTime = now or _timeMs()
