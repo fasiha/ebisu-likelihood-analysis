@@ -12,7 +12,7 @@ from scipy.stats import gamma as gammarv, binom as binomrv, bernoulli  # type: i
 from scipy.special import logsumexp, loggamma  # type: ignore
 from scipy.optimize import shgo, minimize  # type: ignore
 import numpy as np
-from typing import Optional, Union
+from typing import Optional, Union, Callable
 import math
 from dataclasses import dataclass, replace
 from utils import sequentialImportanceResample
@@ -155,6 +155,9 @@ def fullBinomialMonteCarlo(
   estb = weightedGammaEstimate(boosts, w)
   esthl0 = weightedGammaEstimate(hl0s, w)
   # esthl = ebisu._gammaToMean(*weightedGammaEstimate(hls, w))
+  vars = []
+  if True:
+    vars = [np.std(w * v) for v in [boosts, hl0s]]
   return dict(
       kishEffectiveSampleSize=kishEffectiveSampleSize,
       posteriorBoost=estb,
@@ -168,7 +171,13 @@ def fullBinomialMonteCarlo(
       # estb=estb,
       # esthl0=esthl0,
       # esthl=esthl,
+      vars=vars,
   )
+
+
+def kishLog(logweights) -> float:
+  "kish effective sample fraction, given log-weights"
+  return np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / logweights.size
 
 
 def weightedGammaEstimate(h, w):
@@ -553,7 +562,20 @@ class TestEbisu(unittest.TestCase):
                                            [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
           ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
 
+        tic = time.perf_counter()
         full = ebisu.fullUpdateRecall(upd, left=left)
+        toc = time.perf_counter()
+        print(f"fullUpdateRecall: {toc - tic:0.4f} seconds")
+
+        logposterior = lambda x, y: ebisu._posterior(x, y, upd, 0.3, 1.0)
+        tic = time.perf_counter()
+        improv = monteCarloImprove(
+            full.boostPrior,
+            full.initHalflifePrior,
+            logposterior,
+            size=10_000 if fraction < 9 else 30_000)
+        toc = time.perf_counter()
+        print(f"monteCarloImprove: {toc - tic:0.4f} seconds, {improv}")
 
         @cache
         def posterior2d(b, h):
@@ -588,7 +610,9 @@ class TestEbisu(unittest.TestCase):
             [1 for t in upd.elapseds[-1]],
             size=size)
         toc = time.perf_counter()
-        print(f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}")
+        print(
+            f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}, vars={mc['vars']}"
+        )
 
         if False:
           print(f'an={full.initHalflifePrior}; mc={mc["posteriorInitHl"]}')
@@ -607,6 +631,14 @@ class TestEbisu(unittest.TestCase):
               f'VAR: an={_gammaToVar(*full.boostPrior)}; mc={_gammaToVar(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][1]}; int={boostVarInt}'
           )
 
+        self.assertLess(
+            np.max(
+                relativeError(
+                    np.array([improv['x'], improv['y']]),
+                    np.array([mc["posteriorBoost"], mc["posteriorInitHl"]]))),
+            .1,
+            f'improv ~ mc, {fraction=}, {result=}',
+        )
         self.assertLess(
             relativeError(
                 ebisu._gammaToMean(*full.initHalflifePrior),
@@ -632,6 +664,34 @@ class TestEbisu(unittest.TestCase):
             f'numerical integration ~ monte carlo mean boost, {fraction=}, {result=}',
         )
     return upd
+
+
+def monteCarloImprove(xprior: tuple[float, float],
+                      yprior: tuple[float, float],
+                      logposterior: Callable[[float, float], float],
+                      size=10_000):
+  x = gammarv.rvs(xprior[0], scale=1 / xprior[1], size=size)
+  y = gammarv.rvs(yprior[0], scale=1 / yprior[1], size=size)
+  f = np.vectorize(logposterior)
+  logp = f(x, y)
+  logw = logp - (
+      gammarv.logpdf(x, xprior[0], scale=1 / xprior[1]) +
+      gammarv.logpdf(y, yprior[0], scale=1 / yprior[1]))
+  w = np.exp(logw)
+  estx = weightedGammaEstimate(x, w)
+  esty = weightedGammaEstimate(y, w)
+  vars = []
+  if True:
+    vars = [np.std(w * v) for v in [x, y]]
+  return dict(
+      x=estx,
+      y=esty,
+      meanXY=[ebisu._gammaToMean(*estx), ebisu._gammaToMean(*esty)],
+      statsx=weightedMeanVarLogw(logw, x),
+      statsy=weightedMeanVarLogw(logw, y),
+      kish=kishLog(logw),
+      vars=vars,
+  )
 
 
 def vizPosterior(ret: ebisu.Model,
