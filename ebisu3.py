@@ -3,10 +3,11 @@ from math import fsum
 import numpy as np  # type:ignore
 from scipy.stats import gamma as gammarv  # type: ignore
 from scipy.special import kv, kve, gammaln, gamma, betaln, logsumexp  #type: ignore
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from time import time_ns
 from functools import cache
 from typing import Union, Callable
+from copy import deepcopy
 
 
 @dataclass
@@ -29,13 +30,13 @@ def success(res: Result) -> bool:
   if isinstance(res, NoisyBinaryResult):
     return res.result > 0.5
   elif isinstance(res, BinomialResult):
-    return res.total == res.successes
+    return res.successes >= res.total / 2
   else:
     raise Exception("unknown result type")
 
 
 @dataclass
-class Model:
+class Quiz:
   elapseds: list[list[float]]  # I think this has to be hours; possibly empty
 
   # same length as `elapseds`, and each sub-list has the same length
@@ -44,10 +45,20 @@ class Model:
   # 0 < x <= 1 (reinforcement). Same length/sub-lengths as `elapseds`
   startStrengths: list[list[float]]
 
-  # priors
-  initHalflifePrior: tuple[float, float]  # alpha and beta
+
+@dataclass
+class Probability:
+  # priors: fixed at model creation time
+  initHlPrior: tuple[float, float]  # alpha and beta
   boostPrior: tuple[float, float]  # alpha and beta
 
+  # posteriors: these change after quizzes
+  initHl: tuple[float, float]  # alpha and beta
+  boost: tuple[float, float]  # alpha and beta
+
+
+@dataclass
+class Predict:
   # just for developer ease, these can be stored in SQL, etc.
   # halflife is proportional to `logStrength - (startTime * CONSTANT) / halflife`
   # where `CONSTANT` converts `startTime` to same units as `halflife`.
@@ -56,23 +67,38 @@ class Model:
   logStrength: float
 
 
+@dataclass
+class Model:
+  quiz: Quiz
+  prob: Probability
+  pred: Predict
+
+
+def initModel(initHlPrior: tuple[float, float], boostPrior: tuple[float, float]) -> Model:
+  return Model(
+      quiz=Quiz(elapseds=[], results=[], startStrengths=[]),
+      prob=Probability(
+          initHlPrior=initHlPrior, boostPrior=boostPrior, initHl=initHlPrior, boost=boostPrior),
+      pred=Predict(startTime=0, currentHalflife=_gammaToMean(*initHlPrior), logStrength=0.0))
+
+
 def _appendQuiz(model: Model, elapsed: float, result: Result, startStrength: float) -> None:
   # IMPURE
 
-  if len(model.elapseds) == 0:
-    model.elapseds = [[elapsed]]
+  if len(model.quiz.elapseds) == 0:
+    model.quiz.elapseds = [[elapsed]]
   else:
-    model.elapseds[-1].append(elapsed)
+    model.quiz.elapseds[-1].append(elapsed)
 
-  if len(model.results) == 0:
-    model.results = [[result]]
+  if len(model.quiz.results) == 0:
+    model.quiz.results = [[result]]
   else:
-    model.results[-1].append(result)
+    model.quiz.results[-1].append(result)
 
-  if len(model.startStrengths) == 0:
-    model.startStrengths = [[startStrength]]
+  if len(model.quiz.startStrengths) == 0:
+    model.quiz.startStrengths = [[startStrength]]
   else:
-    model.startStrengths[-1].append(startStrength)
+    model.quiz.startStrengths[-1].append(startStrength)
 
 
 def _gammaToMean(alpha: float, beta: float) -> float:
@@ -119,9 +145,9 @@ def _intGammaPdfExp(a: float, b: float, c: float, logDomain: bool):
 
 
 def _currentHalflifePrior(model: Model) -> tuple[tuple[float, float], float]:
-  # if X ~ Gamma(a, b), (c*X) ~ Gamma(a, 1/c*b)
-  a0, b0 = model.initHalflifePrior
-  boosted = model.currentHalflife / _gammaToMean(a0, b0)
+  # if X ~ Gamma(a, b), (c*X) ~ Gamma(a, b/c)
+  a0, b0 = model.prob.initHl
+  boosted = model.pred.currentHalflife / _gammaToMean(a0, b0)
   return (a0, b0 / boosted), boosted
 
 
@@ -232,21 +258,21 @@ def simpleUpdateRecall(
 
   mean, newAlpha, newBeta = (updated.mean, updated.a, updated.b)
 
-  ret = replace(model)  # clone
-  ret.initHalflifePrior = (newAlpha, newBeta * totalBoost)
+  ret = deepcopy(model)  # clone
+  ret.prob.initHl = (newAlpha, newBeta * totalBoost)
   _appendQuiz(ret, elapsed, resultObj, reinforcement)
-  boostMean = _gammaToMean(ret.boostPrior[0], ret.boostPrior[1])
+  boostMean = _gammaToMean(*ret.prob.boost)
   if success(resultObj):
-    boostedHl = mean * _clampLerp2(left * model.currentHalflife, right * model.currentHalflife,
-                                   min(boostMean, 1.0), boostMean, t)
+    boostedHl = mean * _clampLerp2(left * model.pred.currentHalflife, right *
+                                   model.pred.currentHalflife, min(boostMean, 1.0), boostMean, t)
   else:
     boostedHl = mean
   if reinforcement > 0:
-    ret.currentHalflife = boostedHl
-    ret.startTime = now or _timeMs()
-    ret.logStrength = np.log(reinforcement)
+    ret.pred.currentHalflife = boostedHl
+    ret.pred.startTime = now or _timeMs()
+    ret.pred.logStrength = np.log(reinforcement)
   else:
-    ret.currentHalflife = boostedHl
+    ret.pred.currentHalflife = boostedHl
 
   return ret
 
@@ -262,8 +288,8 @@ def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
 
 def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=False):
   "log posterior up to a constant offset"
-  ab, bb = ret.boostPrior
-  ah, bh = ret.initHalflifePrior
+  ab, bb = ret.prob.boostPrior
+  ah, bh = ret.prob.initHlPrior
 
   logb = np.log(b)
   logh = np.log(h)
@@ -271,7 +297,7 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=
 
   loglik = []
   currHalflife = h
-  for (res, e) in zip(ret.results[-1], ret.elapseds[-1]):
+  for (res, e) in zip(ret.quiz.results[-1], ret.quiz.elapseds[-1]):
     logPrecall = -e / currHalflife * LN2
     if isinstance(res, NoisyBinaryResult):
       # noisy binary/Bernoulli
@@ -334,9 +360,12 @@ def fullUpdateRecall(
     size=10_000,
     debug=False,
 ) -> Union[Model, tuple[Model, dict]]:
-  ret = replace(model)
-  ab, bb = ret.boostPrior
-  ah, bh = ret.initHalflifePrior
+  ret = deepcopy(model)
+  if len(ret.quiz.elapseds[-1]) <= 2:
+    # not enough quizzes to update boost
+    return ret
+  ab, bb = ret.prob.boostPrior
+  ah, bh = ret.prob.initHlPrior
   minBoost, maxBoost = gammarv.ppf([.01, 0.9999], ab, scale=1.0 / bb)
   minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
 
@@ -353,12 +382,12 @@ def fullUpdateRecall(
                                  debug=debug)
 
   # update prior(s)
-  ret.boostPrior = (betterFit['alphax'], betterFit['betax'])
-  ret.initHalflifePrior = (betterFit['alphay'], betterFit['betay'])
+  ret.prob.boost = (betterFit['alphax'], betterFit['betax'])
+  ret.prob.initHl = (betterFit['alphay'], betterFit['betay'])
   # update SQL-friendly scalars
-  bmean, hmean = [_gammaToMean(*prior) for prior in [ret.boostPrior, ret.initHalflifePrior]]
+  bmean, hmean = [_gammaToMean(*prior) for prior in [ret.prob.boost, ret.prob.initHl]]
   _, extra = _posterior(bmean, hmean, ret, left, right, extra=True)
-  ret.currentHalflife = extra['currentHalflife']
+  ret.pred.currentHalflife = extra['currentHalflife']
   if debug:
     return ret, dict(kish=betterFit['kish'], stds=betterFit['stds'])
   return ret
@@ -411,19 +440,20 @@ def _kishLog(logweights) -> float:
 def _predictRecall(model: Model, elapsedHours=None, logDomain=True) -> float:
   if elapsedHours is None:
     now = _timeMs()
-    elapsedHours = (now - model.startTime) / MILLISECONDS_PER_HOUR
-  logPrecall = -elapsedHours / model.currentHalflife * LN2 + model.logStrength
+    elapsedHours = (now - model.pred.startTime) / MILLISECONDS_PER_HOUR
+  logPrecall = -elapsedHours / model.pred.currentHalflife * LN2 + model.pred.logStrength
   return logPrecall if logDomain else np.exp(logPrecall)
 
 
 def _predictRecallBayesian(model: Model, elapsedHours=None, logDomain=True) -> float:
   if elapsedHours is None:
     now = _timeMs()
-    elapsedHours = (now - model.startTime) / MILLISECONDS_PER_HOUR
+    elapsedHours = (now - model.pred.startTime) / MILLISECONDS_PER_HOUR
 
   (a, b), _totalBoost = _currentHalflifePrior(model)
   logPrecall = _intGammaPdfExp(
-      a, b, elapsedHours * LN2, logDomain=True) + a * np.log(b) - gammaln(a) + model.logStrength
+      a, b, elapsedHours * LN2,
+      logDomain=True) + a * np.log(b) - gammaln(a) + model.pred.logStrength
   return logPrecall if logDomain else np.exp(logPrecall)
 
 
@@ -434,16 +464,13 @@ def reinitializeWithNewHalflife(
     startTime: Union[float, None] = None,
     strength: float = 1.0,
 ) -> Model:
-  ret = replace(model)
-  ret.elapseds.append([])
-  ret.results.append([])
-  ret.startStrengths.append([])
+  ret = deepcopy(model)
+  ret.quiz.elapseds.append([])
+  ret.quiz.results.append([])
+  ret.quiz.startStrengths.append([])
 
-  ret.initHalflifePrior = _meanVarToGamma(newMean, newStd**2)
-  ret.currentHalflife = newMean
-  if startTime:
-    ret.startTime = startTime
-  else:
-    ret.startTime = _timeMs()
-  ret.logStrength = np.log(strength)
+  ret.prob.initHlPrior = _meanVarToGamma(newMean, newStd**2)
+  ret.pred.currentHalflife = newMean
+  ret.pred.startTime = startTime or _timeMs()
+  ret.pred.logStrength = np.log(strength)
   return ret

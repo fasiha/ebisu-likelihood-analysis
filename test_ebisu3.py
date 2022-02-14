@@ -9,14 +9,12 @@ from functools import cache
 import ebisu3 as ebisu
 import unittest
 from scipy.stats import gamma as gammarv, binom as binomrv, bernoulli  # type: ignore
-from scipy.special import logsumexp, loggamma  # type: ignore
-from scipy.optimize import shgo, minimize  # type: ignore
+from scipy.special import logsumexp  # type: ignore
 import numpy as np
-from typing import Optional, Union, Callable
+from typing import Optional, Union
 import math
-from dataclasses import dataclass, replace
-from utils import sequentialImportanceResample
 import time
+from copy import deepcopy
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 weightedGammaEstimate = ebisu._weightedGammaEstimate
@@ -322,16 +320,7 @@ class TestEbisu(unittest.TestCase):
 
     currentHalflife = initHlMean
 
-    init = ebisu.Model(
-        elapseds=[],
-        results=[],
-        startStrengths=[],
-        initHalflifePrior=initHlPrior,
-        boostPrior=boostPrior,
-        startTime=nowMs,
-        currentHalflife=currentHalflife,
-        logStrength=0.0,
-    )
+    init = ebisu.initModel(initHlPrior, boostPrior)
 
     left = 0.3
 
@@ -348,11 +337,11 @@ class TestEbisu(unittest.TestCase):
             left=left,
         )
 
-        msg = f'result={result}, fraction={fraction} => currHl={updated.currentHalflife}'
+        msg = f'result={result}, fraction={fraction} => currHl={updated.pred.currentHalflife}'
         if result:
-          self.assertTrue(updated.currentHalflife >= initHlMean, msg)
+          self.assertTrue(updated.pred.currentHalflife >= initHlMean, msg)
         else:
-          self.assertTrue(updated.currentHalflife <= initHlMean, msg)
+          self.assertTrue(updated.pred.currentHalflife <= initHlMean, msg)
 
         # this is the unboosted posterior update
         u2 = ebisu._gammaUpdateBinomial(initHlPrior[0], initHlPrior[1], elapsedHours, result, 1)
@@ -364,11 +353,11 @@ class TestEbisu(unittest.TestCase):
 
         # clamp 1 <= boost <= boostMean, and only boost successes
         boost = min(boostMean, max(1, boostFraction)) if result else 1
-        self.assertAlmostEqual(updated.currentHalflife, boost * u2.mean)
+        self.assertAlmostEqual(updated.pred.currentHalflife, boost * u2.mean)
 
         for nextResult in [1, 0]:
           for i in range(3):
-            nextElapsed, boost = updated.currentHalflife, boostMean
+            nextElapsed, boost = updated.pred.currentHalflife, boostMean
             nextUpdate = ebisu.simpleUpdateRecall(
                 updated,
                 nextElapsed,
@@ -377,7 +366,7 @@ class TestEbisu(unittest.TestCase):
                 left=left,
             )
 
-            initMean = lambda model: ebisu._gammaToMean(*model.initHalflifePrior)
+            initMean = lambda model: ebisu._gammaToMean(*model.prob.initHl)
 
             # confirm the initial halflife estimate rose/dropped
             if nextResult:
@@ -386,18 +375,18 @@ class TestEbisu(unittest.TestCase):
               self.assertLess(initMean(nextUpdate), 1.05 * initMean(updated))
 
             # this checks the scaling applied to take the new Gamma to the initial Gamma in simpleUpdateRecall
-            self.assertGreater(nextUpdate.currentHalflife, 1.1 * initMean(nextUpdate))
+            self.assertGreater(nextUpdate.pred.currentHalflife, 1.1 * initMean(nextUpdate))
 
             # meanwhile this checks the scaling to convert the initial halflife Gamma and the current halflife mean
             currHlPrior, _ = ebisu._currentHalflifePrior(updated)
-            self.assertAlmostEqual(updated.currentHalflife,
+            self.assertAlmostEqual(updated.pred.currentHalflife,
                                    gammarv.mean(currHlPrior[0], scale=1 / currHlPrior[1]))
 
             if nextResult:
               # this is an almost tautological test but just as a sanity check, confirm that boosts are being applied?
               next2 = ebisu._gammaUpdateBinomial(currHlPrior[0], currHlPrior[1], nextElapsed,
                                                  nextResult, 1)
-              self.assertAlmostEqual(nextUpdate.currentHalflife, next2.mean * boost)
+              self.assertAlmostEqual(nextUpdate.pred.currentHalflife, next2.mean * boost)
               # don't test this for failures: no boost is applied then
 
             updated = nextUpdate
@@ -415,27 +404,14 @@ class TestEbisu(unittest.TestCase):
     boostBeta = 3.0
     boostPrior = (boostBeta * boostMean, boostBeta)
 
-    nowMs = ebisu._timeMs()
-
-    currentHalflife = initHlMean
-
-    init = ebisu.Model(
-        elapseds=[],
-        results=[],
-        startStrengths=[],
-        initHalflifePrior=initHlPrior,
-        boostPrior=boostPrior,
-        startTime=nowMs,
-        currentHalflife=currentHalflife,
-        logStrength=0.0,
-    )
+    init = ebisu.initModel(initHlPrior, boostPrior)
 
     import mpmath as mp  # type:ignore
 
     left = 0.3
     for fraction in [0.1, 0.5, 1.5, 9.5]:
       for result in [1, 0]:
-        upd = replace(init)
+        upd = deepcopy(init)
         elapsedHours = fraction * initHlMean
         ebisu._appendQuiz(upd, elapsedHours, ebisu.BinomialResult(result, 1), 1.0)
 
@@ -444,7 +420,9 @@ class TestEbisu(unittest.TestCase):
           ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
 
         tic = time.perf_counter()
-        full, fullDebug = ebisu.fullUpdateRecall(upd, left=left, size=10_000, debug=True)
+        tmp: tuple[ebisu.Model, dict] = ebisu.fullUpdateRecall(
+            upd, left=left, size=10_000, debug=True)
+        full, fullDebug = tmp
         toc = time.perf_counter()
         if verbose:
           print(f"fullUpdateRecall: {toc - tic:0.4f} seconds, {fullDebug}")
@@ -478,9 +456,9 @@ class TestEbisu(unittest.TestCase):
         size = 300_000 if fraction < 9 else 1_500_000
         tic = time.perf_counter()
         mc = fullBinomialMonteCarlo(
-            init.initHalflifePrior,
-            init.boostPrior, [t for t in upd.elapseds[-1]], [r.successes for r in upd.results[-1]],
-            [1 for t in upd.elapseds[-1]],
+            init.prob.initHlPrior,
+            init.prob.boostPrior, [t for t in upd.quiz.elapseds[-1]],
+            [r.successes for r in upd.quiz.results[-1]], [1 for t in upd.quiz.elapseds[-1]],
             size=size)
         toc = time.perf_counter()
         if verbose:
@@ -489,32 +467,32 @@ class TestEbisu(unittest.TestCase):
           )
 
         if verbose:
-          print(f'an={full.initHalflifePrior}; mc={mc["posteriorInitHl"]}')
+          print(f'an={full.prob.initHl}; mc={mc["posteriorInitHl"]}')
           print(
-              f'mean: an={ebisu._gammaToMean(*full.initHalflifePrior)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][0]}; int={hl0MeanInt}'
+              f'mean: an={ebisu._gammaToMean(*full.prob.initHl)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][0]}; int={hl0MeanInt}'
           )
           print(
-              f'VAR: an={_gammaToVar(*full.initHalflifePrior)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][1]}; int={hl0VarInt}'
+              f'VAR: an={_gammaToVar(*full.prob.initHl)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][1]}; int={hl0VarInt}'
           )
         if verbose:
-          print(f'an={full.boostPrior}; mc={mc["posteriorBoost"]}')
+          print(f'an={full.prob.boost}; mc={mc["posteriorBoost"]}')
           print(
-              f'mean: an={ebisu._gammaToMean(*full.boostPrior)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][0]}; int={boostMeanInt}'
+              f'mean: an={ebisu._gammaToMean(*full.prob.boost)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][0]}; int={boostMeanInt}'
           )
           print(
-              f'VAR: an={_gammaToVar(*full.boostPrior)}; mc={_gammaToVar(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][1]}; int={boostVarInt}'
+              f'VAR: an={_gammaToVar(*full.prob.boost)}; mc={_gammaToVar(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][1]}; int={boostVarInt}'
           )
 
         self.assertLess(
             np.max(
                 relativeError(
-                    np.array([full.boostPrior, full.initHalflifePrior]),
+                    np.array([full.prob.boost, full.prob.initHl]),
                     np.array([mc["posteriorBoost"], mc["posteriorInitHl"]]))),
             .15,
             f'analytical ~ mc, {fraction=}, {result=}',
         )
         self.assertLess(
-            relativeError(ebisu._gammaToMean(*full.initHalflifePrior), hl0MeanInt),
+            relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt),
             0.05,
             f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}',
         )
@@ -525,7 +503,7 @@ class TestEbisu(unittest.TestCase):
         )
 
         self.assertLess(
-            relativeError(ebisu._gammaToMean(*full.boostPrior), boostMeanInt),
+            relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt),
             0.05,
             f'analytical ~ numerical integration mean boost, {fraction=}, {result=}',
         )
