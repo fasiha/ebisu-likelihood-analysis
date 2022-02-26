@@ -464,14 +464,23 @@ class TestEbisu(unittest.TestCase):
           if verbose:
             boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
 
-          size = 300_000 if fraction < 9 else 1_500_000
+          def fullVsMCErr(full, mc):
+            "Find max error between boost/halflife α/β"
+            return np.max(
+                relativeError([full.prob.boost, full.prob.initHl],
+                              [mc["posteriorBoost"], mc["posteriorInitHl"]]))
+
+          MAX_AB_ERR = .15
           tic = time.perf_counter()
-          mc = fullBinomialMonteCarlo(
-              init.prob.initHlPrior,
-              init.prob.boostPrior,
-              upd.quiz.elapseds[-1],
-              upd.quiz.results[-1],
-              size=size)
+          for size in [200_000, 300_000, 900_000, 1_500_000]:
+            mc = fullBinomialMonteCarlo(
+                init.prob.initHlPrior,
+                init.prob.boostPrior,
+                upd.quiz.elapseds[-1],
+                upd.quiz.results[-1],
+                size=size)
+            if fullVsMCErr(full, mc) < MAX_AB_ERR:
+              break
           toc = time.perf_counter()
           if verbose:
             print(
@@ -496,12 +505,7 @@ class TestEbisu(unittest.TestCase):
             )
 
           self.assertLess(
-              np.max(
-                  relativeError([full.prob.boost, full.prob.initHl],
-                                [mc["posteriorBoost"], mc["posteriorInitHl"]])),
-              .15,
-              f'analytical ~ mc, {fraction=}, {result=}',
-          )
+              fullVsMCErr(full, mc), MAX_AB_ERR, f'analytical ~ mc, {fraction=}, {result=}')
           self.assertLess(
               relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt),
               0.05,
