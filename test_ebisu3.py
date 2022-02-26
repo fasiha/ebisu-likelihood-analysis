@@ -28,8 +28,7 @@ def fullBinomialMonteCarlo(
     hlPrior: tuple[float, float],
     bPrior: tuple[float, float],
     ts: list[float],
-    ks: list[int],
-    ns: list[int],
+    results: list[ebisu.Result],
     left=0.3,
     size=1_000_000,
 ):
@@ -39,17 +38,24 @@ def fullBinomialMonteCarlo(
   logweights = np.zeros(size)
 
   hls = hl0s.copy()
-  for t, k, n in zip(ts, ks, ns):
+  for t, res in zip(ts, results):
     logps = -t / hls * np.log(2)
-    if k == n:  # success
-      logweights += logps
+    success = ebisu.success(res)
+    if isinstance(res, ebisu.BinomialResult):
+      if success:
+        logweights += logps
+      else:
+        logweights += np.log(-np.expm1(logps))
+      # This is the likelihood of observing the data, and is more accurate than
+      # `binomrv.logpmf(k, n, pRecall)` since `pRecall` is already in log domain
     else:
-      logweights += np.log(-np.expm1(logps))
-    # This is the likelihood of observing the data, and is more accurate than
-    # `binomrv.logpmf(k, n, pRecall)` since `pRecall` is already in log domain
-
+      q0, q1 = res.q0, res.q1
+      if not success:
+        q0, q1 = 1 - q0, 1 - q1
+      logpfails = np.log(-np.expm1(logps))
+      logweights += logsumexp(np.vstack([logps + np.log(q1), logpfails + np.log(q0)]), axis=0)
     # Apply boost for successful quizzes
-    if ebisu.success(ebisu.BinomialResult(k, n)):  # reuse same rule as ebisu
+    if success:  # reuse same rule as ebisu
       hls *= clampLerp(left * hls, hls, np.minimum(boosts, 1.0), boosts, t)
 
   kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / size
@@ -457,8 +463,9 @@ class TestEbisu(unittest.TestCase):
         tic = time.perf_counter()
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
-            init.prob.boostPrior, [t for t in upd.quiz.elapseds[-1]],
-            [r.successes for r in upd.quiz.results[-1]], [1 for t in upd.quiz.elapseds[-1]],
+            init.prob.boostPrior,
+            upd.quiz.elapseds[-1],
+            upd.quiz.results[-1],
             size=size)
         toc = time.perf_counter()
         if verbose:
