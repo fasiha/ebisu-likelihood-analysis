@@ -170,7 +170,8 @@ def _gammaUpdateNoisyMonteCarlo(
 
 
 def relativeError(actual: float, expected: float) -> float:
-  return np.abs(actual - expected) / np.abs(expected)
+  e, a = np.array(expected), np.array(actual)
+  return np.abs(a - e) / np.abs(e)
 
 
 class TestEbisu(unittest.TestCase):
@@ -417,108 +418,111 @@ class TestEbisu(unittest.TestCase):
     left = 0.3
     for fraction in [0.1, 0.5, 1.5, 9.5]:
       for result in [1, 0]:
-        upd = deepcopy(init)
-        elapsedHours = fraction * initHlMean
-        ebisu._appendQuiz(upd, elapsedHours, ebisu.BinomialResult(result, 1), 1.0)
+        for lastNoisy in [False]:
+          upd = deepcopy(init)
+          elapsedHours = fraction * initHlMean
+          upd = ebisu.simpleUpdateRecall(upd, elapsedHours, result)
 
-        for nextResult, nextElapsed in zip([1, 1, 1],
-                                           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
-          ebisu._appendQuiz(upd, nextElapsed, ebisu.BinomialResult(nextResult, 1), 1.0)
+          for nextResult, nextElapsed in zip(
+              [1, 1, 0.9 if lastNoisy else 1],
+              [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
+            upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult)
 
-        tic = time.perf_counter()
-        tmp: tuple[ebisu.Model, dict] = ebisu.fullUpdateRecall(
-            upd, left=left, size=10_000, debug=True)
-        full, fullDebug = tmp
-        toc = time.perf_counter()
-        if verbose:
-          print(f"fullUpdateRecall: {toc - tic:0.4f} seconds, {fullDebug}")
+          tic = time.perf_counter()
+          tmp: tuple[ebisu.Model, dict] = ebisu.fullUpdateRecall(
+              upd, left=left, size=10_000, debug=True)
+          full, fullDebug = tmp
+          toc = time.perf_counter()
+          if verbose:
+            print(f"fullUpdateRecall: {toc - tic:0.4f} seconds, {fullDebug}")
 
-        @cache
-        def posterior2d(b, h):
-          return mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+          @cache
+          def posterior2d(b, h):
+            return mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
 
-        method = 'gauss-legendre'
-        maxdegree = 4 if fraction < 9 else 5
-        tic = time.perf_counter()
-        f0 = lambda b, h: posterior2d(b, h)
-        den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-        fb = lambda b, h: b * posterior2d(b, h)
-        numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-        fh = lambda b, h: h * posterior2d(b, h)
-        numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+          method = 'gauss-legendre'
+          maxdegree = 4 if fraction < 9 else 5
+          tic = time.perf_counter()
+          f0 = lambda b, h: posterior2d(b, h)
+          den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+          fb = lambda b, h: b * posterior2d(b, h)
+          numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+          fh = lambda b, h: h * posterior2d(b, h)
+          numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
 
-        # second non-central moment
-        fh = lambda b, h: h**2 * posterior2d(b, h)
-        numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-        fb = lambda b, h: b**2 * posterior2d(b, h)
-        numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-        toc = time.perf_counter()
-        if verbose:
-          print(f"Numerical integration: {toc - tic:0.4f} seconds")
+          # second non-central moment
+          if verbose:
+            fh = lambda b, h: h**2 * posterior2d(b, h)
+            numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+            fb = lambda b, h: b**2 * posterior2d(b, h)
+            numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+          toc = time.perf_counter()
+          if verbose:
+            print(f"Numerical integration: {toc - tic:0.4f} seconds")
 
-        boostMeanInt, hl0MeanInt = numb / den, numh / den
-        boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
+          boostMeanInt, hl0MeanInt = numb / den, numh / den
+          if verbose:
+            boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
 
-        size = 300_000 if fraction < 9 else 1_500_000
-        tic = time.perf_counter()
-        mc = fullBinomialMonteCarlo(
-            init.prob.initHlPrior,
-            init.prob.boostPrior,
-            upd.quiz.elapseds[-1],
-            upd.quiz.results[-1],
-            size=size)
-        toc = time.perf_counter()
-        if verbose:
-          print(
-              f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}, vars={mc['vars']}"
+          size = 300_000 if fraction < 9 else 1_500_000
+          tic = time.perf_counter()
+          mc = fullBinomialMonteCarlo(
+              init.prob.initHlPrior,
+              init.prob.boostPrior,
+              upd.quiz.elapseds[-1],
+              upd.quiz.results[-1],
+              size=size)
+          toc = time.perf_counter()
+          if verbose:
+            print(
+                f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}, vars={mc['vars']}"
+            )
+
+          if verbose:
+            print(f'an={full.prob.initHl}; mc={mc["posteriorInitHl"]}')
+            print(
+                f'mean: an={ebisu._gammaToMean(*full.prob.initHl)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][0]}; int={hl0MeanInt}'
+            )
+            print(
+                f'VAR: an={_gammaToVar(*full.prob.initHl)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][1]}; int={hl0VarInt}'
+            )
+          if verbose:
+            print(f'an={full.prob.boost}; mc={mc["posteriorBoost"]}')
+            print(
+                f'mean: an={ebisu._gammaToMean(*full.prob.boost)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][0]}; int={boostMeanInt}'
+            )
+            print(
+                f'VAR: an={_gammaToVar(*full.prob.boost)}; mc={_gammaToVar(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][1]}; int={boostVarInt}'
+            )
+
+          self.assertLess(
+              np.max(
+                  relativeError([full.prob.boost, full.prob.initHl],
+                                [mc["posteriorBoost"], mc["posteriorInitHl"]])),
+              .15,
+              f'analytical ~ mc, {fraction=}, {result=}',
+          )
+          self.assertLess(
+              relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt),
+              0.05,
+              f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}',
+          )
+          self.assertLess(
+              relativeError(ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt),
+              0.04,
+              f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}',
           )
 
-        if verbose:
-          print(f'an={full.prob.initHl}; mc={mc["posteriorInitHl"]}')
-          print(
-              f'mean: an={ebisu._gammaToMean(*full.prob.initHl)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][0]}; int={hl0MeanInt}'
+          self.assertLess(
+              relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt),
+              0.05,
+              f'analytical ~ numerical integration mean boost, {fraction=}, {result=}',
           )
-          print(
-              f'VAR: an={_gammaToVar(*full.prob.initHl)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][1]}; int={hl0VarInt}'
+          self.assertLess(
+              relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt),
+              0.02,
+              f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}',
           )
-        if verbose:
-          print(f'an={full.prob.boost}; mc={mc["posteriorBoost"]}')
-          print(
-              f'mean: an={ebisu._gammaToMean(*full.prob.boost)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][0]}; int={boostMeanInt}'
-          )
-          print(
-              f'VAR: an={_gammaToVar(*full.prob.boost)}; mc={_gammaToVar(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][1]}; int={boostVarInt}'
-          )
-
-        self.assertLess(
-            np.max(
-                relativeError(
-                    np.array([full.prob.boost, full.prob.initHl]),
-                    np.array([mc["posteriorBoost"], mc["posteriorInitHl"]]))),
-            .15,
-            f'analytical ~ mc, {fraction=}, {result=}',
-        )
-        self.assertLess(
-            relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt),
-            0.05,
-            f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}',
-        )
-        self.assertLess(
-            relativeError(ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt),
-            0.04,
-            f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}',
-        )
-
-        self.assertLess(
-            relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt),
-            0.05,
-            f'analytical ~ numerical integration mean boost, {fraction=}, {result=}',
-        )
-        self.assertLess(
-            relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt),
-            0.02,
-            f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}',
-        )
     return upd
 
 
