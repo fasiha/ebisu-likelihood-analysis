@@ -423,13 +423,15 @@ class TestEbisu(unittest.TestCase):
           elapsedHours = fraction * initHlMean
           upd = ebisu.simpleUpdateRecall(upd, elapsedHours, result)
 
-          for nextResult, nextElapsed in zip(
-              [1, 1, 1 if not lastNoisy else
-               (0.8 if result else 0.2)], [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
-            upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult)
+          for nextResult, nextElapsed, nextTotal in zip(
+              [1, 1, 1 if not lastNoisy else (0.8 if result else 0.2)],
+              [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
+              [1, 1, 2 if not lastNoisy else 1],
+          ):
+            upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult, total=nextTotal)
 
           tmp: tuple[ebisu.Model, dict] = ebisu.fullUpdateRecall(
-              upd, left=left, size=50_000, debug=True)
+              upd, left=left, size=100_000, debug=True)
           full, fullDebug = tmp
 
           @cache
@@ -465,8 +467,6 @@ class TestEbisu(unittest.TestCase):
           MC_INT_MEAN_ERR = 0.03
 
           for size in [10_000, 100_000, 1_000_000, 10_000_000]:
-            if size == 1_000_000:
-              full = ebisu.fullUpdateRecall(upd, left=left, size=100_000)
             mc = fullBinomialMonteCarlo(
                 init.prob.initHlPrior,
                 init.prob.boostPrior,
