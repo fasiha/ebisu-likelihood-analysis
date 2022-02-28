@@ -418,7 +418,7 @@ class TestEbisu(unittest.TestCase):
     left = 0.3
     for fraction in [0.1, 0.5, 1.5, 9.5]:
       for result in [1, 0]:
-        for lastNoisy in [False]:
+        for lastNoisy in [False, True]:
           upd = deepcopy(init)
           elapsedHours = fraction * initHlMean
           upd = ebisu.simpleUpdateRecall(upd, elapsedHours, result)
@@ -428,57 +428,54 @@ class TestEbisu(unittest.TestCase):
                (0.8 if result else 0.2)], [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
             upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult)
 
-          tic = time.perf_counter()
           tmp: tuple[ebisu.Model, dict] = ebisu.fullUpdateRecall(
-              upd, left=left, size=10_000, debug=True)
+              upd, left=left, size=50_000, debug=True)
           full, fullDebug = tmp
-          toc = time.perf_counter()
-          if verbose:
-            print(f"fullUpdateRecall: {toc - tic:0.4f} seconds, {fullDebug}")
 
           @cache
           def posterior2d(b, h):
             return mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
 
-          method = 'gauss-legendre'
-          maxdegree = 4 if fraction < 9 else 5
-          tic = time.perf_counter()
-          f0 = lambda b, h: posterior2d(b, h)
-          den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-          fb = lambda b, h: b * posterior2d(b, h)
-          numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-          fh = lambda b, h: h * posterior2d(b, h)
-          numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+          def integration(maxdegree: int, wantVar: bool = False):
+            method = 'gauss-legendre'
+            f0 = lambda b, h: posterior2d(b, h)
+            den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+            fb = lambda b, h: b * posterior2d(b, h)
+            numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+            fh = lambda b, h: h * posterior2d(b, h)
+            numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
 
-          # second non-central moment
-          if verbose:
-            fh = lambda b, h: h**2 * posterior2d(b, h)
-            numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-            fb = lambda b, h: b**2 * posterior2d(b, h)
-            numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-          toc = time.perf_counter()
-          if verbose:
-            print(f"Numerical integration: {toc - tic:0.4f} seconds")
+            # second non-central moment
+            if wantVar:
+              fh = lambda b, h: h**2 * posterior2d(b, h)
+              numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+              fb = lambda b, h: b**2 * posterior2d(b, h)
+              numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
 
-          boostMeanInt, hl0MeanInt = numb / den, numh / den
-          if verbose:
-            boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
+            boostMeanInt, hl0MeanInt = numb / den, numh / den
+            if wantVar:
+              boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
+              return boostMeanInt, hl0MeanInt, boostVarInt, hl0VarInt
+            return boostMeanInt, hl0MeanInt
 
-          fullVsMCAlphaBeta = lambda full, mc: np.max(
-              relativeError([full.prob.boost, full.prob.initHl],
-                            [mc["posteriorBoost"], mc["posteriorInitHl"]]))
-          AB_ERR = .15
-          FULL_INT_MEAN_ERR = 0.05
-          MC_INT_MEAN_ERR = 0.04
-          tic = time.perf_counter()
-          for size in [100_000, 300_000, 1_000_000, 3_000_000]:
+          boostMeanInt, hl0MeanInt = integration(5)
+
+          AB_ERR = .05
+          FULL_INT_MEAN_ERR = 0.03
+          MC_INT_MEAN_ERR = 0.03
+
+          for size in [10_000, 100_000, 1_000_000, 10_000_000]:
+            if size == 1_000_000:
+              full = ebisu.fullUpdateRecall(upd, left=left, size=100_000)
             mc = fullBinomialMonteCarlo(
                 init.prob.initHlPrior,
                 init.prob.boostPrior,
                 upd.quiz.elapseds[-1],
                 upd.quiz.results[-1],
                 size=size)
-            ab_err = fullVsMCAlphaBeta(full, mc)
+            ab_err = np.max(
+                relativeError([full.prob.boost, full.prob.initHl],
+                              [mc["posteriorBoost"], mc["posteriorInitHl"]]))
             full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
             mc_int_mean_err_hl0 = relativeError(
                 ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
@@ -488,30 +485,24 @@ class TestEbisu(unittest.TestCase):
             if (ab_err < AB_ERR and full_int_mean_err_hl0 < FULL_INT_MEAN_ERR and
                 mc_int_mean_err_hl0 < MC_INT_MEAN_ERR and
                 full_int_mean_err_b < FULL_INT_MEAN_ERR and mc_int_mean_err_b < MC_INT_MEAN_ERR):
-              print(f'{size=}')
               break
-          toc = time.perf_counter()
           if verbose:
+            errs = [
+                float(x) for x in [
+                    ab_err, full_int_mean_err_hl0, mc_int_mean_err_hl0, full_int_mean_err_b,
+                    mc_int_mean_err_b
+                ]
+            ]
+            indiv_ab_err = relativeError([full.prob.boost, full.prob.initHl],
+                                         [mc["posteriorBoost"], mc["posteriorInitHl"]]).ravel()
+
             print(
-                f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}, vars={mc['vars']}"
+                f"size={size:0.2g}, max={max(errs):0.3f}, errs={', '.join([f'{e:0.3f}' for e in errs])}, ab_err={indiv_ab_err}"
             )
 
-            print(f'an={full.prob.initHl}; mc={mc["posteriorInitHl"]}')
-            print(
-                f'mean: an={ebisu._gammaToMean(*full.prob.initHl)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][0]}; int={hl0MeanInt}'
-            )
-            print(
-                f'VAR: an={_gammaToVar(*full.prob.initHl)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][1]}; int={hl0VarInt}'
-            )
-            print(f'an={full.prob.boost}; mc={mc["posteriorBoost"]}')
-            print(
-                f'mean: an={ebisu._gammaToMean(*full.prob.boost)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][0]}; int={boostMeanInt}'
-            )
-            print(
-                f'VAR: an={_gammaToVar(*full.prob.boost)}; mc={_gammaToVar(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][1]}; int={boostVarInt}'
-            )
-
-          ab_err = fullVsMCAlphaBeta(full, mc)
+          ab_err = np.max(
+              relativeError([full.prob.boost, full.prob.initHl],
+                            [mc["posteriorBoost"], mc["posteriorInitHl"]]))
           full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
           mc_int_mean_err_hl0 = relativeError(
               ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
