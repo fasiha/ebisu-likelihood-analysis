@@ -424,8 +424,8 @@ class TestEbisu(unittest.TestCase):
           upd = ebisu.simpleUpdateRecall(upd, elapsedHours, result)
 
           for nextResult, nextElapsed in zip(
-              [1, 1, 0.9 if lastNoisy else 1],
-              [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
+              [1, 1, 1 if not lastNoisy else
+               (0.8 if result else 0.2)], [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7]):
             upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult)
 
           tic = time.perf_counter()
@@ -464,22 +464,31 @@ class TestEbisu(unittest.TestCase):
           if verbose:
             boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
 
-          def fullVsMCErr(full, mc):
-            "Find max error between boost/halflife α/β"
-            return np.max(
-                relativeError([full.prob.boost, full.prob.initHl],
-                              [mc["posteriorBoost"], mc["posteriorInitHl"]]))
-
-          MAX_AB_ERR = .15
+          fullVsMCAlphaBeta = lambda full, mc: np.max(
+              relativeError([full.prob.boost, full.prob.initHl],
+                            [mc["posteriorBoost"], mc["posteriorInitHl"]]))
+          AB_ERR = .15
+          FULL_INT_MEAN_ERR = 0.05
+          MC_INT_MEAN_ERR = 0.04
           tic = time.perf_counter()
-          for size in [200_000, 300_000, 900_000, 1_500_000]:
+          for size in [100_000, 300_000, 1_000_000, 3_000_000]:
             mc = fullBinomialMonteCarlo(
                 init.prob.initHlPrior,
                 init.prob.boostPrior,
                 upd.quiz.elapseds[-1],
                 upd.quiz.results[-1],
                 size=size)
-            if fullVsMCErr(full, mc) < MAX_AB_ERR:
+            ab_err = fullVsMCAlphaBeta(full, mc)
+            full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
+            mc_int_mean_err_hl0 = relativeError(
+                ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
+            full_int_mean_err_b = relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt)
+            mc_int_mean_err_b = relativeError(
+                ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt)
+            if (ab_err < AB_ERR and full_int_mean_err_hl0 < FULL_INT_MEAN_ERR and
+                mc_int_mean_err_hl0 < MC_INT_MEAN_ERR and
+                full_int_mean_err_b < FULL_INT_MEAN_ERR and mc_int_mean_err_b < MC_INT_MEAN_ERR):
+              print(f'{size=}')
               break
           toc = time.perf_counter()
           if verbose:
@@ -487,7 +496,6 @@ class TestEbisu(unittest.TestCase):
                 f"Monte Carlo: {toc - tic:0.4f} seconds, kish={mc['kishEffectiveSampleSize']}, vars={mc['vars']}"
             )
 
-          if verbose:
             print(f'an={full.prob.initHl}; mc={mc["posteriorInitHl"]}')
             print(
                 f'mean: an={ebisu._gammaToMean(*full.prob.initHl)}; mc={ebisu._gammaToMean(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][0]}; int={hl0MeanInt}'
@@ -495,7 +503,6 @@ class TestEbisu(unittest.TestCase):
             print(
                 f'VAR: an={_gammaToVar(*full.prob.initHl)}; mc={_gammaToVar(*mc["posteriorInitHl"])}; rawMc={mc["statsInitHl"][1]}; int={hl0VarInt}'
             )
-          if verbose:
             print(f'an={full.prob.boost}; mc={mc["posteriorBoost"]}')
             print(
                 f'mean: an={ebisu._gammaToMean(*full.prob.boost)}; mc={ebisu._gammaToMean(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][0]}; int={boostMeanInt}'
@@ -504,28 +511,28 @@ class TestEbisu(unittest.TestCase):
                 f'VAR: an={_gammaToVar(*full.prob.boost)}; mc={_gammaToVar(*mc["posteriorBoost"])}; rawMc={mc["statsBoost"][1]}; int={boostVarInt}'
             )
 
+          ab_err = fullVsMCAlphaBeta(full, mc)
+          full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
+          mc_int_mean_err_hl0 = relativeError(
+              ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
+          full_int_mean_err_b = relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt)
+          mc_int_mean_err_b = relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt)
+
+          self.assertLess(ab_err, AB_ERR, f'analytical ~ mc, {fraction=}, {result=}, {lastNoisy=}')
           self.assertLess(
-              fullVsMCErr(full, mc), MAX_AB_ERR, f'analytical ~ mc, {fraction=}, {result=}')
+              full_int_mean_err_hl0, FULL_INT_MEAN_ERR,
+              f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}')
           self.assertLess(
-              relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt),
-              0.05,
-              f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}',
-          )
-          self.assertLess(
-              relativeError(ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt),
-              0.04,
-              f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}',
-          )
+              mc_int_mean_err_hl0, MC_INT_MEAN_ERR,
+              f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}')
 
           self.assertLess(
-              relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt),
-              0.05,
-              f'analytical ~ numerical integration mean boost, {fraction=}, {result=}',
+              full_int_mean_err_b, FULL_INT_MEAN_ERR,
+              f'analytical ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}'
           )
           self.assertLess(
-              relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt),
-              0.02,
-              f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}',
+              mc_int_mean_err_b, MC_INT_MEAN_ERR,
+              f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}'
           )
     return upd
 
