@@ -428,7 +428,7 @@ class TestEbisu(unittest.TestCase):
           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
           [1, 1, 2 if not lastNoisy else 1],
       ):
-        upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult, total=nextTotal)
+        upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult, total=nextTotal, q0=0.05)
 
       ### Full Ebisu update (max-likelihood to enhanced Monte Carlo proposal)
       # 100_000 samples is probably WAY TOO MANY for practical purposes but
