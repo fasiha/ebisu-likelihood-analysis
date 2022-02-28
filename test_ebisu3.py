@@ -417,6 +417,7 @@ class TestEbisu(unittest.TestCase):
     import mpmath as mp  # type:ignore
 
     left = 0.3
+    # simulate a variety of 4-quiz trajectories:
     for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False, True]):
       upd = deepcopy(init)
       elapsedHours = fraction * initHlMean
@@ -429,10 +430,20 @@ class TestEbisu(unittest.TestCase):
       ):
         upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult, total=nextTotal)
 
+      ### Full Ebisu update (max-likelihood to enhanced Monte Carlo proposal)
+      # 100_000 samples is probably WAY TOO MANY for practical purposes but
+      # here I want to ascertain that this approach is correct as you crank up
+      # the number of samples. If we have confidence that this estimator behaves
+      # correctly, we can in practice use 1_000 or 10_000 samples and accept a
+      # less accurate model but remain confident that the *means* of this posterior
+      # are accurate.
       tmp: tuple[ebisu.Model, dict] = ebisu.fullUpdateRecall(
           upd, left=left, size=100_000, debug=True)
       full, fullDebug = tmp
 
+      ### Numerical integration via mpmath
+      # This method stops being accurate when you have tens of quizzes but it's matches
+      # the other methods well for ~4. It also can only compute posterior moments.
       @cache
       def posterior2d(b, h):
         return mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
@@ -464,7 +475,9 @@ class TestEbisu(unittest.TestCase):
       AB_ERR = .05
       FULL_INT_MEAN_ERR = 0.03
       MC_INT_MEAN_ERR = 0.03
-
+      ### Raw Monte Carlo simulation (without max likelihood enhanced proposal)
+      # Because this method can be inaccurate and slow, try it with a small number
+      # of samples and increase it quickly if we don't meet tolerances.
       for size in [10_000, 100_000, 1_000_000, 10_000_000]:
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
@@ -497,6 +510,11 @@ class TestEbisu(unittest.TestCase):
             f"size={size:0.2g}, max={max(errs):0.3f}, errs={', '.join([f'{e:0.3f}' for e in errs])}, ab_err={indiv_ab_err}"
         )
 
+      ### Finally, compare all three updates above.
+      # Since numerical integration only gave us means, we can compare its means to
+      # (a) full Ebisu update and (b) raw Monte Carlo. Also of course compare the
+      # fit (α, β) for both random variables (initial halflife and boost) between
+      # full Ebisu vs raw Monte Carlo.
       ab_err = np.max(
           relativeError([full.prob.boost, full.prob.initHl],
                         [mc["posteriorBoost"], mc["posteriorInitHl"]]))
