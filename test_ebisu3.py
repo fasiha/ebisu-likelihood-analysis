@@ -5,6 +5,7 @@ or
 $ python test_ebisu3.py
 """
 
+from itertools import product
 from functools import cache
 import ebisu3 as ebisu
 import unittest
@@ -416,115 +417,108 @@ class TestEbisu(unittest.TestCase):
     import mpmath as mp  # type:ignore
 
     left = 0.3
-    for fraction in [0.1, 0.5, 1.5, 9.5]:
-      for result in [1, 0]:
-        for lastNoisy in [False, True]:
-          upd = deepcopy(init)
-          elapsedHours = fraction * initHlMean
-          upd = ebisu.simpleUpdateRecall(upd, elapsedHours, result)
+    for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False, True]):
+      upd = deepcopy(init)
+      elapsedHours = fraction * initHlMean
+      upd = ebisu.simpleUpdateRecall(upd, elapsedHours, result)
 
-          for nextResult, nextElapsed, nextTotal in zip(
-              [1, 1, 1 if not lastNoisy else (0.8 if result else 0.2)],
-              [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
-              [1, 1, 2 if not lastNoisy else 1],
-          ):
-            upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult, total=nextTotal)
+      for nextResult, nextElapsed, nextTotal in zip(
+          [1, 1, 1 if not lastNoisy else (0.8 if result else 0.2)],
+          [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
+          [1, 1, 2 if not lastNoisy else 1],
+      ):
+        upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult, total=nextTotal)
 
-          tmp: tuple[ebisu.Model, dict] = ebisu.fullUpdateRecall(
-              upd, left=left, size=100_000, debug=True)
-          full, fullDebug = tmp
+      tmp: tuple[ebisu.Model, dict] = ebisu.fullUpdateRecall(
+          upd, left=left, size=100_000, debug=True)
+      full, fullDebug = tmp
 
-          @cache
-          def posterior2d(b, h):
-            return mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
+      @cache
+      def posterior2d(b, h):
+        return mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
 
-          def integration(maxdegree: int, wantVar: bool = False):
-            method = 'gauss-legendre'
-            f0 = lambda b, h: posterior2d(b, h)
-            den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-            fb = lambda b, h: b * posterior2d(b, h)
-            numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-            fh = lambda b, h: h * posterior2d(b, h)
-            numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+      def integration(maxdegree: int, wantVar: bool = False):
+        method = 'gauss-legendre'
+        f0 = lambda b, h: posterior2d(b, h)
+        den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+        fb = lambda b, h: b * posterior2d(b, h)
+        numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+        fh = lambda b, h: h * posterior2d(b, h)
+        numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
 
-            # second non-central moment
-            if wantVar:
-              fh = lambda b, h: h**2 * posterior2d(b, h)
-              numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
-              fb = lambda b, h: b**2 * posterior2d(b, h)
-              numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+        # second non-central moment
+        if wantVar:
+          fh = lambda b, h: h**2 * posterior2d(b, h)
+          numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+          fb = lambda b, h: b**2 * posterior2d(b, h)
+          numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
 
-            boostMeanInt, hl0MeanInt = numb / den, numh / den
-            if wantVar:
-              boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
-              return boostMeanInt, hl0MeanInt, boostVarInt, hl0VarInt
-            return boostMeanInt, hl0MeanInt
+        boostMeanInt, hl0MeanInt = numb / den, numh / den
+        if wantVar:
+          boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
+          return boostMeanInt, hl0MeanInt, boostVarInt, hl0VarInt
+        return boostMeanInt, hl0MeanInt
 
-          boostMeanInt, hl0MeanInt = integration(5)
+      boostMeanInt, hl0MeanInt = integration(5)
 
-          AB_ERR = .05
-          FULL_INT_MEAN_ERR = 0.03
-          MC_INT_MEAN_ERR = 0.03
+      AB_ERR = .05
+      FULL_INT_MEAN_ERR = 0.03
+      MC_INT_MEAN_ERR = 0.03
 
-          for size in [10_000, 100_000, 1_000_000, 10_000_000]:
-            mc = fullBinomialMonteCarlo(
-                init.prob.initHlPrior,
-                init.prob.boostPrior,
-                upd.quiz.elapseds[-1],
-                upd.quiz.results[-1],
-                size=size)
-            ab_err = np.max(
-                relativeError([full.prob.boost, full.prob.initHl],
-                              [mc["posteriorBoost"], mc["posteriorInitHl"]]))
-            full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
-            mc_int_mean_err_hl0 = relativeError(
-                ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
-            full_int_mean_err_b = relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt)
-            mc_int_mean_err_b = relativeError(
-                ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt)
-            if (ab_err < AB_ERR and full_int_mean_err_hl0 < FULL_INT_MEAN_ERR and
-                mc_int_mean_err_hl0 < MC_INT_MEAN_ERR and
-                full_int_mean_err_b < FULL_INT_MEAN_ERR and mc_int_mean_err_b < MC_INT_MEAN_ERR):
-              break
-          if verbose:
-            errs = [
-                float(x) for x in [
-                    ab_err, full_int_mean_err_hl0, mc_int_mean_err_hl0, full_int_mean_err_b,
-                    mc_int_mean_err_b
-                ]
+      for size in [10_000, 100_000, 1_000_000, 10_000_000]:
+        mc = fullBinomialMonteCarlo(
+            init.prob.initHlPrior,
+            init.prob.boostPrior,
+            upd.quiz.elapseds[-1],
+            upd.quiz.results[-1],
+            size=size)
+        ab_err = np.max(
+            relativeError([full.prob.boost, full.prob.initHl],
+                          [mc["posteriorBoost"], mc["posteriorInitHl"]]))
+        full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
+        mc_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
+        full_int_mean_err_b = relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt)
+        mc_int_mean_err_b = relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt)
+        if (ab_err < AB_ERR and full_int_mean_err_hl0 < FULL_INT_MEAN_ERR and
+            mc_int_mean_err_hl0 < MC_INT_MEAN_ERR and full_int_mean_err_b < FULL_INT_MEAN_ERR and
+            mc_int_mean_err_b < MC_INT_MEAN_ERR):
+          break
+      if verbose:
+        errs = [
+            float(x) for x in [
+                ab_err, full_int_mean_err_hl0, mc_int_mean_err_hl0, full_int_mean_err_b,
+                mc_int_mean_err_b
             ]
-            indiv_ab_err = relativeError([full.prob.boost, full.prob.initHl],
-                                         [mc["posteriorBoost"], mc["posteriorInitHl"]]).ravel()
+        ]
+        indiv_ab_err = relativeError([full.prob.boost, full.prob.initHl],
+                                     [mc["posteriorBoost"], mc["posteriorInitHl"]]).ravel()
 
-            print(
-                f"size={size:0.2g}, max={max(errs):0.3f}, errs={', '.join([f'{e:0.3f}' for e in errs])}, ab_err={indiv_ab_err}"
-            )
+        print(
+            f"size={size:0.2g}, max={max(errs):0.3f}, errs={', '.join([f'{e:0.3f}' for e in errs])}, ab_err={indiv_ab_err}"
+        )
 
-          ab_err = np.max(
-              relativeError([full.prob.boost, full.prob.initHl],
-                            [mc["posteriorBoost"], mc["posteriorInitHl"]]))
-          full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
-          mc_int_mean_err_hl0 = relativeError(
-              ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
-          full_int_mean_err_b = relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt)
-          mc_int_mean_err_b = relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt)
+      ab_err = np.max(
+          relativeError([full.prob.boost, full.prob.initHl],
+                        [mc["posteriorBoost"], mc["posteriorInitHl"]]))
+      full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
+      mc_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
+      full_int_mean_err_b = relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt)
+      mc_int_mean_err_b = relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt)
 
-          self.assertLess(ab_err, AB_ERR, f'analytical ~ mc, {fraction=}, {result=}, {lastNoisy=}')
-          self.assertLess(
-              full_int_mean_err_hl0, FULL_INT_MEAN_ERR,
-              f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}')
-          self.assertLess(
-              mc_int_mean_err_hl0, MC_INT_MEAN_ERR,
-              f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}')
+      self.assertLess(ab_err, AB_ERR, f'analytical ~ mc, {fraction=}, {result=}, {lastNoisy=}')
+      self.assertLess(
+          full_int_mean_err_hl0, FULL_INT_MEAN_ERR,
+          f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}')
+      self.assertLess(
+          mc_int_mean_err_hl0, MC_INT_MEAN_ERR,
+          f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}')
 
-          self.assertLess(
-              full_int_mean_err_b, FULL_INT_MEAN_ERR,
-              f'analytical ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}'
-          )
-          self.assertLess(
-              mc_int_mean_err_b, MC_INT_MEAN_ERR,
-              f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}'
-          )
+      self.assertLess(
+          full_int_mean_err_b, FULL_INT_MEAN_ERR,
+          f'analytical ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}')
+      self.assertLess(
+          mc_int_mean_err_b, MC_INT_MEAN_ERR,
+          f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}')
     return upd
 
 
