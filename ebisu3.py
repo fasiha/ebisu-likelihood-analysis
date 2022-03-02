@@ -75,6 +75,7 @@ class Model:
 
 
 def initModel(initHlPrior: tuple[float, float], boostPrior: tuple[float, float]) -> Model:
+  assert _gammaToMean(*boostPrior) > 1.0, 'boost mean should be > 1'
   return Model(
       quiz=Quiz(elapseds=[], results=[], startStrengths=[]),
       prob=Probability(
@@ -263,8 +264,8 @@ def simpleUpdateRecall(
   _appendQuiz(ret, elapsed, resultObj, reinforcement)
   boostMean = _gammaToMean(*ret.prob.boost)
   if success(resultObj):
-    boostedHl = mean * _clampLerp2(left * model.pred.currentHalflife, right *
-                                   model.pred.currentHalflife, min(boostMean, 1.0), boostMean, t)
+    boostedHl = mean * _clampLerp2(left * model.pred.currentHalflife,
+                                   right * model.pred.currentHalflife, 1, max(1.0, boostMean), t)
   else:
     boostedHl = mean
   if reinforcement > 0:
@@ -306,14 +307,14 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=
       if z:
         # Stan has this nice function, log_mix, which is perfect for this...
         loglik.append(logsumexp([logPrecall + np.log(res.q1), logPfail + np.log(res.q0)]))
-        currHalflife *= _clampLerp2(left * currHalflife, right * currHalflife, min(b, 1.0), b, e)
+        currHalflife *= _clampLerp2(left * currHalflife, right * currHalflife, 1, max(1, b), e)
       else:
         loglik.append(logsumexp([logPrecall + np.log(1 - res.q1), logPfail + np.log(1 - res.q0)]))
     else:
       # binomial
       if success(res):
         loglik.append(logPrecall)
-        currHalflife *= _clampLerp2(left * currHalflife, right * currHalflife, min(b, 1.0), b, e)
+        currHalflife *= _clampLerp2(left * currHalflife, right * currHalflife, 1, max(1, b), e)
       else:
         loglik.append(np.log(-np.expm1(logPrecall)))
   logposterior = fsum(loglik + [logprior])

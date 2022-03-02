@@ -57,7 +57,7 @@ def fullBinomialMonteCarlo(
       logweights += logsumexp(np.vstack([logps + np.log(q1), logpfails + np.log(q0)]), axis=0)
     # Apply boost for successful quizzes
     if success:  # reuse same rule as ebisu
-      hls *= clampLerp(left * hls, hls, np.minimum(boosts, 1.0), boosts, t)
+      hls *= clampLerp(left * hls, hls, np.ones(size), np.maximum(boosts, 1.0), t)
 
   kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / size
   w = np.exp(logweights)
@@ -326,11 +326,10 @@ class TestEbisu(unittest.TestCase):
 
     nowMs = ebisu._timeMs()
 
-    currentHalflife = initHlMean
-
     init = ebisu.initModel(initHlPrior, boostPrior)
 
     left = 0.3
+    right = 1.0
 
     for fraction in [0.1, 0.5, 1.0, 2.0, 10.0]:
       for result in [0, 1]:
@@ -343,7 +342,7 @@ class TestEbisu(unittest.TestCase):
             now=nowMs + elapsedHours * MILLISECONDS_PER_HOUR,
             reinforcement=1.0,
             left=left,
-        )
+            right=right)
 
         msg = f'result={result}, fraction={fraction} => currHl={updated.pred.currentHalflife}'
         if result:
@@ -372,7 +371,7 @@ class TestEbisu(unittest.TestCase):
                 nextResult,
                 now=nowMs + (elapsedHours + (i + 1) * nextElapsed) * MILLISECONDS_PER_HOUR,
                 left=left,
-            )
+                right=right)
 
             initMean = lambda model: ebisu._gammaToMean(*model.prob.initHl)
 
@@ -402,6 +401,48 @@ class TestEbisu(unittest.TestCase):
             # don't bother to check alpha/beta: a test in Python will just be tautological
             # (we'll repeat the same thing in the test as in the code). That has to happen
             # via Stan?
+
+  def test_1_then_0s(self, verbose=False):
+    initHlMean = 10  # hours
+    initHlBeta = 0.1
+    initHlPrior = (initHlBeta * initHlMean, initHlBeta)
+
+    boostMean = 1.5
+    boostBeta = 3.0
+    boostPrior = (boostBeta * boostMean, boostBeta)
+
+    base = ebisu.initModel(initHlPrior, boostPrior)
+
+    ts = [20., 10., 5., 4., 3., 2., 1.]
+    correct_ts = [ts[0]]  # just one success
+
+    fulls: list[ebisu.Model] = [base]
+    for t in ts:
+      tmp = ebisu.simpleUpdateRecall(fulls[-1], t, int(t in correct_ts))
+      fulls.append(ebisu.fullUpdateRecall(tmp, size=10_000))
+    if verbose:
+      print('\n'.join([
+          f'FULL curr={m.pred.currentHalflife}, init={ebisu._gammaToMean(*m.prob.initHl)}, bmean={ebisu._gammaToMean(*m.prob.boost)}'
+          for m in fulls[1:]
+      ]))
+
+    # require monotonically decreasing initHalflife, current halflife, and boost
+    # since we have an initial success followed by a string of failures
+    m = lambda tup: ebisu._gammaToMean(*tup)
+    for left, right in zip(fulls[1:], fulls[2:]):
+      self.assertGreater(left.pred.currentHalflife, right.pred.currentHalflife)
+      self.assertGreater(m(left.prob.initHl), m(right.prob.initHl))
+      self.assertGreaterEqual(m(left.prob.initHl), m(right.prob.initHl))
+
+    self.assertLess(m(fulls[-1].prob.boost), 1.0, 'mean boost<1 reached')
+
+    # add another failure
+    s = ebisu.simpleUpdateRecall(fulls[-1], 1.0, 0)
+
+    # even though mean boost<1, the curr halflife should be equal to
+    # init halflife (within machine precision) since successes can only boost
+    # by scalar >=1.
+    self.assertAlmostEqual(m(s.prob.initHl), s.pred.currentHalflife)
 
   def test_full(self, verbose=False):
     initHlMean = 10  # hours
