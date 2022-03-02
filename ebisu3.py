@@ -74,13 +74,123 @@ class Model:
   pred: Predict
 
 
-def initModel(initHlPrior: tuple[float, float], boostPrior: tuple[float, float]) -> Model:
-  assert _gammaToMean(*boostPrior) > 1.0, 'boost mean should be > 1'
+def initModel(initHlPrior: Union[tuple[float, float], None] = None,
+              boostPrior: Union[tuple[float, float], None] = None,
+              initHlMean: Union[float, None] = None,
+              initHlBeta: Union[float, None] = None,
+              boostMean: Union[float, None] = None,
+              boostBeta: Union[float, None] = None) -> Model:
+  if initHlPrior:
+    hl0 = initHlPrior
+  elif initHlMean is not None and initHlBeta is not None:
+    hl0 = (initHlMean * initHlBeta, initHlBeta)
+  else:
+    raise ValueError('init halflife prior not specified')
+
+  if boostPrior:
+    b = boostPrior
+  elif boostMean is not None and boostBeta is not None:
+    b = (boostMean * boostBeta, boostBeta)
+  else:
+    raise ValueError('boost prior not specified')
+
+  assert _gammaToMean(*hl0) > 0, 'boost mean should be positive'
+  assert _gammaToMean(*b) > 1.0, 'boost mean should be > 1'
   return Model(
       quiz=Quiz(elapseds=[], results=[], startStrengths=[]),
-      prob=Probability(
-          initHlPrior=initHlPrior, boostPrior=boostPrior, initHl=initHlPrior, boost=boostPrior),
-      pred=Predict(startTime=0, currentHalflife=_gammaToMean(*initHlPrior), logStrength=0.0))
+      prob=Probability(initHlPrior=hl0, boostPrior=b, initHl=hl0, boost=b),
+      pred=Predict(startTime=0, currentHalflife=_gammaToMean(*hl0), logStrength=0.0))
+
+
+def simpleUpdateRecall(
+    model: Model,
+    elapsed: float,
+    successes: Union[float, int],
+    total: int = 1,
+    now: Union[None, float] = None,
+    q0: Union[None, float] = None,
+    reinforcement: float = 1.0,
+    left=0.3,
+    right=1.0,
+) -> Model:
+  (a, b), totalBoost = _currentHalflifePrior(model)
+  t = elapsed
+  resultObj: Union[NoisyBinaryResult, BinomialResult]
+
+  if total == 1 and (0 < successes < 1):
+    q1 = max(successes, 1 - successes)  # between 0.5 and 1
+    q0 = 1 - q1 if q0 is None else q0  # either the input argument OR between 0 and 0.5
+    z = successes >= 0.5
+    updated = _gammaUpdateNoisy(a, b, t, q1, q0, z)
+    resultObj = NoisyBinaryResult(result=successes, q1=q1, q0=q0)
+
+  else:
+    assert successes == np.floor(successes), "float `successes` implies `total==1`"
+    assert total, "non-zero binomial trials"
+    k = int(successes)
+    n = total
+    updated = _gammaUpdateBinomial(a, b, t, k, n)
+    resultObj = BinomialResult(successes=k, total=n)
+
+  mean, newAlpha, newBeta = (updated.mean, updated.a, updated.b)
+
+  ret = deepcopy(model)  # clone
+  ret.prob.initHl = (newAlpha, newBeta * totalBoost)
+  _appendQuiz(ret, elapsed, resultObj, reinforcement)
+  boostMean = _gammaToMean(*ret.prob.boost)
+  if success(resultObj):
+    boostedHl = mean * _clampLerp2(left * model.pred.currentHalflife,
+                                   right * model.pred.currentHalflife, 1, max(1.0, boostMean), t)
+  else:
+    boostedHl = mean
+  if reinforcement > 0:
+    ret.pred.currentHalflife = boostedHl
+    ret.pred.startTime = now or _timeMs()
+    ret.pred.logStrength = np.log(reinforcement)
+  else:
+    ret.pred.currentHalflife = boostedHl
+
+  return ret
+
+
+def fullUpdateRecall(
+    model: Model,
+    left=0.3,
+    right=1.0,
+    size=10_000,
+    debug=False,
+) -> Union[Model, tuple[Model, dict]]:
+  ret = deepcopy(model)
+  if len(ret.quiz.elapseds[-1]) <= 2:
+    # not enough quizzes to update boost
+    return ret
+  ab, bb = ret.prob.boostPrior
+  ah, bh = ret.prob.initHlPrior
+  minBoost, maxBoost = gammarv.ppf([.01, 0.9999], ab, scale=1.0 / bb)
+  minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
+
+  posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
+  bs, hs = np.random.rand(2, 400)
+  bs = bs * (maxBoost - minBoost) + minBoost
+  hs = hs * (maxHalflife - minHalflife) + minHalflife
+  posteriors = np.vectorize(posterior2d, [float])(bs, hs)
+  fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=1.0)
+
+  betterFit = _monteCarloImprove((fit['alphax'], fit['betax']), (fit['alphay'], fit['betay']),
+                                 posterior2d,
+                                 size=size,
+                                 debug=debug)
+
+  # update prior(s)
+  ret.prob.boost = (betterFit['alphax'], betterFit['betax'])
+  ret.prob.initHl = (betterFit['alphay'], betterFit['betay'])
+  # update SQL-friendly scalars
+  bmean, hmean = [_gammaToMean(*prior) for prior in [ret.prob.boost, ret.prob.initHl]]
+  _, extra = _posterior(bmean, hmean, ret, left, right, extra=True)
+  ret.pred.currentHalflife = extra['currentHalflife']
+  if debug:
+    return ret, dict(kish=betterFit['kish'], stds=betterFit['stds'])
+  return ret
 
 
 def _appendQuiz(model: Model, elapsed: float, result: Result, startStrength: float) -> None:
@@ -227,57 +337,6 @@ def _gammaUpdateBinomial(a: float, b: float, t: float, k: int, n: int) -> GammaU
   return GammaUpdate(a=newAlpha, b=newBeta, mean=np.exp(logmean))
 
 
-def simpleUpdateRecall(
-    model: Model,
-    elapsed: float,
-    successes: Union[float, int],
-    total: int = 1,
-    now: Union[None, float] = None,
-    q0: Union[None, float] = None,
-    reinforcement: float = 1.0,
-    left=0.3,
-    right=1.0,
-) -> Model:
-  (a, b), totalBoost = _currentHalflifePrior(model)
-  t = elapsed
-  resultObj: Union[NoisyBinaryResult, BinomialResult]
-
-  if total == 1 and (0 < successes < 1):
-    q1 = max(successes, 1 - successes)  # between 0.5 and 1
-    q0 = 1 - q1 if q0 is None else q0  # either the input argument OR between 0 and 0.5
-    z = successes >= 0.5
-    updated = _gammaUpdateNoisy(a, b, t, q1, q0, z)
-    resultObj = NoisyBinaryResult(result=successes, q1=q1, q0=q0)
-
-  else:
-    assert successes == np.floor(successes), "float `successes` implies `total==1`"
-    assert total, "non-zero binomial trials"
-    k = int(successes)
-    n = total
-    updated = _gammaUpdateBinomial(a, b, t, k, n)
-    resultObj = BinomialResult(successes=k, total=n)
-
-  mean, newAlpha, newBeta = (updated.mean, updated.a, updated.b)
-
-  ret = deepcopy(model)  # clone
-  ret.prob.initHl = (newAlpha, newBeta * totalBoost)
-  _appendQuiz(ret, elapsed, resultObj, reinforcement)
-  boostMean = _gammaToMean(*ret.prob.boost)
-  if success(resultObj):
-    boostedHl = mean * _clampLerp2(left * model.pred.currentHalflife,
-                                   right * model.pred.currentHalflife, 1, max(1.0, boostMean), t)
-  else:
-    boostedHl = mean
-  if reinforcement > 0:
-    ret.pred.currentHalflife = boostedHl
-    ret.pred.startTime = now or _timeMs()
-    ret.pred.logStrength = np.log(reinforcement)
-  else:
-    ret.pred.currentHalflife = boostedHl
-
-  return ret
-
-
 def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
   if x <= x1:
     return y1
@@ -352,46 +411,6 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
       betay=betay,
       meanX=_gammaToMean(alphax, betax),
       meanY=_gammaToMean(alphay, betay))
-
-
-def fullUpdateRecall(
-    model: Model,
-    left=0.3,
-    right=1.0,
-    size=10_000,
-    debug=False,
-) -> Union[Model, tuple[Model, dict]]:
-  ret = deepcopy(model)
-  if len(ret.quiz.elapseds[-1]) <= 2:
-    # not enough quizzes to update boost
-    return ret
-  ab, bb = ret.prob.boostPrior
-  ah, bh = ret.prob.initHlPrior
-  minBoost, maxBoost = gammarv.ppf([.01, 0.9999], ab, scale=1.0 / bb)
-  minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
-
-  posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
-  bs, hs = np.random.rand(2, 400)
-  bs = bs * (maxBoost - minBoost) + minBoost
-  hs = hs * (maxHalflife - minHalflife) + minHalflife
-  posteriors = np.vectorize(posterior2d, [float])(bs, hs)
-  fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=1.0)
-
-  betterFit = _monteCarloImprove((fit['alphax'], fit['betax']), (fit['alphay'], fit['betay']),
-                                 posterior2d,
-                                 size=size,
-                                 debug=debug)
-
-  # update prior(s)
-  ret.prob.boost = (betterFit['alphax'], betterFit['betax'])
-  ret.prob.initHl = (betterFit['alphay'], betterFit['betay'])
-  # update SQL-friendly scalars
-  bmean, hmean = [_gammaToMean(*prior) for prior in [ret.prob.boost, ret.prob.initHl]]
-  _, extra = _posterior(bmean, hmean, ret, left, right, extra=True)
-  ret.pred.currentHalflife = extra['currentHalflife']
-  if debug:
-    return ret, dict(kish=betterFit['kish'], stds=betterFit['stds'])
-  return ret
 
 
 def _monteCarloImprove(xprior: tuple[float, float],

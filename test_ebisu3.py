@@ -177,6 +177,9 @@ def relativeError(actual: float, expected: float) -> float:
 
 class TestEbisu(unittest.TestCase):
 
+  def setUp(self):
+    np.random.seed(seed=233423 + 1)  # for sanity when testing with Monte Carlo
+
   def test_gamma_update_noisy(self):
     """Test _gammaUpdateNoisy for various q0 and against Monte Carlo
 
@@ -192,7 +195,6 @@ class TestEbisu(unittest.TestCase):
 
     MAX_RELERR_AB = .02
     MAX_RELERR_MEAN = .01
-    np.random.seed(seed=233423 + 1)  # for sanity when testing with Monte Carlo
     for fraction in [0.1, 0.5, 1., 2., 10.]:
       t = initHlMean * fraction
       for q0 in [.15, 0, None]:
@@ -324,9 +326,7 @@ class TestEbisu(unittest.TestCase):
     boostBeta = 3.0
     boostPrior = (boostBeta * boostMean, boostBeta)
 
-    nowMs = ebisu._timeMs()
-
-    init = ebisu.initModel(initHlPrior, boostPrior)
+    init = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior)
 
     left = 0.3
     right = 1.0
@@ -335,14 +335,7 @@ class TestEbisu(unittest.TestCase):
       for result in [0, 1]:
         elapsedHours = fraction * initHlMean
         updated = ebisu.simpleUpdateRecall(
-            init,
-            elapsedHours,
-            result,
-            total=1,
-            now=nowMs + elapsedHours * MILLISECONDS_PER_HOUR,
-            reinforcement=1.0,
-            left=left,
-            right=right)
+            init, elapsedHours, result, total=1, left=left, right=right)
 
         msg = f'result={result}, fraction={fraction} => currHl={updated.pred.currentHalflife}'
         if result:
@@ -411,7 +404,7 @@ class TestEbisu(unittest.TestCase):
     boostBeta = 3.0
     boostPrior = (boostBeta * boostMean, boostBeta)
 
-    base = ebisu.initModel(initHlPrior, boostPrior)
+    base = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior)
 
     ts = [20., 10., 5., 4., 3., 2., 1.]
     correct_ts = [ts[0]]  # just one success
@@ -453,7 +446,7 @@ class TestEbisu(unittest.TestCase):
     boostBeta = 3.0
     boostPrior = (boostBeta * boostMean, boostBeta)
 
-    init = ebisu.initModel(initHlPrior, boostPrior)
+    init = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior)
 
     import mpmath as mp  # type:ignore
 
@@ -519,7 +512,7 @@ class TestEbisu(unittest.TestCase):
       ### Raw Monte Carlo simulation (without max likelihood enhanced proposal)
       # Because this method can be inaccurate and slow, try it with a small number
       # of samples and increase it quickly if we don't meet tolerances.
-      for size in [10_000, 100_000, 1_000_000, 10_000_000]:
+      for size in [10_000, 100_000, 1_000_000, 5_000_000]:
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
             init.prob.boostPrior,
