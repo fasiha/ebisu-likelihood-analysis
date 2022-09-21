@@ -10,10 +10,10 @@ boostBeta = 3.0
 boostPrior = (boostBeta * boostMean, boostBeta)
 
 model = ebisu.initModel(initHlPrior, boostPrior)
-model = ebisu.simpleUpdateRecall(model, 15.0, 1)
-model = ebisu.simpleUpdateRecall(model, 35.0, 0)
-model = ebisu.simpleUpdateRecall(model, 25.0, 1)
-model = ebisu.simpleUpdateRecall(model, 45.0, 0.9)
+model = ebisu.updateRecall(model, 15.0, 1)
+model = ebisu.updateRecall(model, 35.0, 0)
+model = ebisu.updateRecall(model, 25.0, 1)
+model = ebisu.updateRecall(model, 45.0, 0.9)
 
 
 def summarize(big: ebisu.Model, small: ebisu.Model):
@@ -25,7 +25,8 @@ def summarize(big: ebisu.Model, small: ebisu.Model):
       print(f'{bigsmall} | {rv} | {post} | {mean:0.3f} | {this.pred.currentHalflife:0.3f}')
 
 
-summarize(ebisu.fullUpdateRecall(model, size=100_000), ebisu.fullUpdateRecall(model, size=1_000))
+summarize(
+    ebisu.updateRecallHistory(model, size=100_000), ebisu.updateRecallHistory(model, size=1_000))
 
 df = utils.sqliteToDf('collection.anki2', True)
 print(f'loaded SQL data, {len(df)} rows')
@@ -33,6 +34,7 @@ train, TEST_TRAIN = utils.traintest(df)
 t = next(t for t in train if t.fractionCorrect > 0.8)
 real = ebisu.initModel(initHlPrior, boostPrior)
 for x, t in zip(t.results, t.dts_hours):
-  real = ebisu.simpleUpdateRecall(real, t, int(x >= 2))
+  real = ebisu.updateRecall(real, t, int(x >= 2))
 
-summarize(ebisu.fullUpdateRecall(real, size=100_000), ebisu.fullUpdateRecall(real, size=1_000))
+summarize(
+    ebisu.updateRecallHistory(real, size=100_000), ebisu.updateRecallHistory(real, size=1_000))

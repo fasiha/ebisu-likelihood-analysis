@@ -77,32 +77,39 @@ class Model:
 def initModel(initHlPrior: Union[tuple[float, float], None] = None,
               boostPrior: Union[tuple[float, float], None] = None,
               initHlMean: Union[float, None] = None,
-              initHlBeta: Union[float, None] = None,
+              initHlStd: Union[float, None] = None,
               boostMean: Union[float, None] = None,
-              boostBeta: Union[float, None] = None) -> Model:
+              boostStd: Union[float, None] = None) -> Model:
+  """
+  Create brand new Ebisu model
+
+  Must provide either `initHlPrior` (Gamma random variable's α and β) or both
+  `initHlMean` and `initHlStd` (Gamma random variable's mean and standard
+  deviation σ), and similarly for `boostPrior` vs `boostMean` and `boostStd`.
+  """
   if initHlPrior:
     hl0 = initHlPrior
-  elif initHlMean is not None and initHlBeta is not None:
-    hl0 = (initHlMean * initHlBeta, initHlBeta)
+  elif initHlMean is not None and initHlStd is not None:
+    hl0 = _meanVarToGamma(initHlMean, initHlStd**2)
   else:
     raise ValueError('init halflife prior not specified')
 
   if boostPrior:
     b = boostPrior
-  elif boostMean is not None and boostBeta is not None:
-    b = (boostMean * boostBeta, boostBeta)
+  elif boostMean is not None and boostStd is not None:
+    b = _meanVarToGamma(boostMean, boostStd**2)
   else:
     raise ValueError('boost prior not specified')
 
-  assert _gammaToMean(*hl0) > 0, 'boost mean should be positive'
-  assert _gammaToMean(*b) > 1.0, 'boost mean should be > 1'
+  assert _gammaToMean(*hl0) > 0, 'init halflife mean should be positive'
+  assert _gammaToMean(*b) >= 1.0, 'boost mean should be >= 1'
   return Model(
       quiz=Quiz(elapseds=[], results=[], startStrengths=[]),
       prob=Probability(initHlPrior=hl0, boostPrior=b, initHl=hl0, boost=b),
       pred=Predict(startTime=0, currentHalflife=_gammaToMean(*hl0), logStrength=0.0))
 
 
-def simpleUpdateRecall(
+def updateRecall(
     model: Model,
     elapsed: float,
     successes: Union[float, int],
@@ -153,7 +160,7 @@ def simpleUpdateRecall(
   return ret
 
 
-def fullUpdateRecall(
+def updateRecallHistory(
     model: Model,
     left=0.3,
     right=1.0,
@@ -346,6 +353,12 @@ def _clampLerp2(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
   return (y1 * (1 - mu) + y2 * mu)
 
 
+def _clampLerp3(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
+  mu = (x - x1) / (x2 - x1)
+  y = (y1 * (1 - mu) + y2 * mu)
+  return min(y2, max(y1, y))
+
+
 def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=False):
   "log posterior up to a constant offset"
   ab, bb = ret.prob.boostPrior
@@ -477,10 +490,10 @@ def _predictRecallBayesian(model: Model, elapsedHours=None, logDomain=True) -> f
   return logPrecall if logDomain else np.exp(logPrecall)
 
 
-def reinitializeWithNewHalflife(
+def resetHalflife(
     model: Model,
-    newMean: float,
-    newStd: float,
+    initHlMean: float,
+    initHlStd: float,
     startTime: Union[float, None] = None,
     strength: float = 1.0,
 ) -> Model:
@@ -489,8 +502,8 @@ def reinitializeWithNewHalflife(
   ret.quiz.results.append([])
   ret.quiz.startStrengths.append([])
 
-  ret.prob.initHlPrior = _meanVarToGamma(newMean, newStd**2)
-  ret.pred.currentHalflife = newMean
+  ret.prob.initHlPrior = _meanVarToGamma(initHlMean, initHlStd**2)
+  ret.pred.currentHalflife = initHlMean
   ret.pred.startTime = startTime or _timeMs()
   ret.pred.logStrength = np.log(strength)
   return ret

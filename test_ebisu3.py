@@ -31,6 +31,7 @@ def fullBinomialMonteCarlo(
     ts: list[float],
     results: list[ebisu.Result],
     left=0.3,
+    right=1.0,
     size=1_000_000,
 ):
   hl0s = gammarv.rvs(hlPrior[0], scale=1 / hlPrior[1], size=size)
@@ -57,7 +58,7 @@ def fullBinomialMonteCarlo(
       logweights += logsumexp(np.vstack([logps + np.log(q1), logpfails + np.log(q0)]), axis=0)
     # Apply boost for successful quizzes
     if success:  # reuse same rule as ebisu
-      hls *= clampLerp(left * hls, hls, np.ones(size), np.maximum(boosts, 1.0), t)
+      hls *= clampLerp(left * hls, right * hls, np.ones(size), np.maximum(boosts, 1.0), t)
 
   kishEffectiveSampleSize = np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / size
   w = np.exp(logweights)
@@ -334,8 +335,7 @@ class TestEbisu(unittest.TestCase):
     for fraction in [0.1, 0.5, 1.0, 2.0, 10.0]:
       for result in [0, 1]:
         elapsedHours = fraction * initHlMean
-        updated = ebisu.simpleUpdateRecall(
-            init, elapsedHours, result, total=1, left=left, right=right)
+        updated = ebisu.updateRecall(init, elapsedHours, result, total=1, left=left, right=right)
 
         msg = f'result={result}, fraction={fraction} => currHl={updated.pred.currentHalflife}'
         if result:
@@ -358,13 +358,8 @@ class TestEbisu(unittest.TestCase):
         for nextResult in [1, 0]:
           for i in range(3):
             nextElapsed, boost = updated.pred.currentHalflife, boostMean
-            nextUpdate = ebisu.simpleUpdateRecall(
-                updated,
-                nextElapsed,
-                nextResult,
-                now=nowMs + (elapsedHours + (i + 1) * nextElapsed) * MILLISECONDS_PER_HOUR,
-                left=left,
-                right=right)
+            nextUpdate = ebisu.updateRecall(
+                updated, nextElapsed, nextResult, left=left, right=right)
 
             initMean = lambda model: ebisu._gammaToMean(*model.prob.initHl)
 
@@ -411,8 +406,8 @@ class TestEbisu(unittest.TestCase):
 
     fulls: list[ebisu.Model] = [base]
     for t in ts:
-      tmp = ebisu.simpleUpdateRecall(fulls[-1], t, int(t in correct_ts))
-      fulls.append(ebisu.fullUpdateRecall(tmp, size=10_000))
+      tmp = ebisu.updateRecall(fulls[-1], t, int(t in correct_ts))
+      fulls.append(ebisu.updateRecallHistory(tmp, size=10_000))
     if verbose:
       print('\n'.join([
           f'FULL curr={m.pred.currentHalflife}, init={ebisu._gammaToMean(*m.prob.initHl)}, bmean={ebisu._gammaToMean(*m.prob.boost)}'
@@ -430,7 +425,7 @@ class TestEbisu(unittest.TestCase):
     self.assertLess(m(fulls[-1].prob.boost), 1.0, 'mean boost<1 reached')
 
     # add another failure
-    s = ebisu.simpleUpdateRecall(fulls[-1], 1.0, 0)
+    s = ebisu.updateRecall(fulls[-1], 1.0, 0)
 
     # even though mean boost<1, the curr halflife should be equal to
     # init halflife (within machine precision) since successes can only boost
@@ -455,14 +450,14 @@ class TestEbisu(unittest.TestCase):
     for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False, True]):
       upd = deepcopy(init)
       elapsedHours = fraction * initHlMean
-      upd = ebisu.simpleUpdateRecall(upd, elapsedHours, result)
+      upd = ebisu.updateRecall(upd, elapsedHours, result)
 
       for nextResult, nextElapsed, nextTotal in zip(
           [1, 1, 1 if not lastNoisy else (0.8 if result else 0.2)],
           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
           [1, 1, 2 if not lastNoisy else 1],
       ):
-        upd = ebisu.simpleUpdateRecall(upd, nextElapsed, nextResult, total=nextTotal, q0=0.05)
+        upd = ebisu.updateRecall(upd, nextElapsed, nextResult, total=nextTotal, q0=0.05)
 
       ### Full Ebisu update (max-likelihood to enhanced Monte Carlo proposal)
       # 100_000 samples is probably WAY TOO MANY for practical purposes but
@@ -471,7 +466,7 @@ class TestEbisu(unittest.TestCase):
       # correctly, we can in practice use 1_000 or 10_000 samples and accept a
       # less accurate model but remain confident that the *means* of this posterior
       # are accurate.
-      tmp: tuple[ebisu.Model, dict] = ebisu.fullUpdateRecall(
+      tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(
           upd, left=left, size=100_000, debug=True)
       full, fullDebug = tmp
 
