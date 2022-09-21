@@ -108,46 +108,51 @@ if __name__ == '__main__':
   train, TEST_TRAIN = utils.traintest(df)
   print(f'split flashcards into train/test, {len(train)} cards in train set')
 
-  card = next(t for t in train if t.fractionCorrect > 0.8)
-  hlMeanStd = (10., 10.)
-  boostMeanStd = (1.5, 0.7)
-  convertMode: ConvertAnkiMode = 'binary'
+  fracs = [0.8, 0.85, 0.9, 0.95]
+  for card in [next(t for t in train if t.fractionCorrect > frac) for frac in fracs]:
+    hlMeanStd = (10., 10.)
+    boostMeanStd = (1.5, 0.7)
+    convertMode: ConvertAnkiMode = 'binary'
 
-  fit, fitdf = binomialStan(
-      card,
-      mode=convertMode,
-      hlMeanStd=hlMeanStd,
-      boostMeanStd=boostMeanStd,
-      iter_warmup=20_000,
-      iter_sampling=100_000)
+    fit, fitdf = binomialStan(
+        card,
+        mode=convertMode,
+        hlMeanStd=hlMeanStd,
+        boostMeanStd=boostMeanStd,
+        iter_warmup=20_000,
+        iter_sampling=100_000)
 
-  print(fit.summary())
-  print(fit.diagnose())
-  pd.plotting.scatter_matrix(fitdf, hist_kwds=dict(bins=100))
+    diagnosis = fit.diagnose()
+    if 'no problems detected' not in diagnosis:
+      print(diagnosis)
 
-  # This is a silly way to fit posterior MCMC samples to two new Gammas but it's
-  # how Ebisu3 does it so let's check its math
-  hPostStan = ebisu._meanVarToGamma(np.mean(fitdf.hl0), np.var(fitdf.hl0))
-  bPostStan = ebisu._meanVarToGamma(np.mean(fitdf.boost), np.var(fitdf.boost))
+    pd.plotting.scatter_matrix(fitdf, hist_kwds=dict(bins=100))
+    plt.suptitle(f"# Card {card.key}")
 
-  model = ebisu.initModel(
-      initHlMean=hlMeanStd[0],
-      initHlStd=hlMeanStd[1],
-      boostMean=boostMeanStd[0],
-      boostStd=boostMeanStd[1])
-  for ankiResult, elapsedTime in zip(card.results, card.dts_hours):
-    s, t = convertAnkiResultToBinomial(ankiResult, convertMode)
-    model = ebisu.updateRecall(model, elapsedTime, successes=s, total=t)
+    # This is a silly way to fit posterior MCMC samples to two new Gammas but it's
+    # how Ebisu3 does it so let's check its math
+    hPostStan = ebisu._meanVarToGamma(np.mean(fitdf.hl0), np.var(fitdf.hl0))
+    bPostStan = ebisu._meanVarToGamma(np.mean(fitdf.boost), np.var(fitdf.boost))
 
-  model, debug = ebisu.updateRecallHistory(model, size=50_000, debug=True)
+    model = ebisu.initModel(
+        initHlMean=hlMeanStd[0],
+        initHlStd=hlMeanStd[1],
+        boostMean=boostMeanStd[0],
+        boostStd=boostMeanStd[1])
+    for ankiResult, elapsedTime in zip(card.results, card.dts_hours):
+      s, t = convertAnkiResultToBinomial(ankiResult, convertMode)
+      model = ebisu.updateRecall(model, elapsedTime, successes=s, total=t)
 
-  print(f"# Card id {card.key}")
-  print('## Stan')
-  print(f'hl0   mean={gammaToMean(*hPostStan):0.4g}, std={gammaToStd(*hPostStan):0.4g}')
-  print(f'boost mean={gammaToMean(*bPostStan):0.4g}, std={gammaToStd(*bPostStan):0.4g}')
-  print('## Ebisu v3')
-  print(
-      f'hl0   mean={gammaToMean(*model.prob.initHl):0.4g}, std={gammaToStd(*model.prob.initHl):0.4g}'
-  )
-  print(
-      f'boost mean={gammaToMean(*model.prob.boost):0.4g}, std={gammaToStd(*model.prob.boost):0.4g}')
+    model, debug = ebisu.updateRecallHistory(model, size=50_000, debug=True)
+
+    print(f"# Card {card.key}")
+    print('## Stan')
+    print(f'hl0   mean={gammaToMean(*hPostStan):0.4g}, std={gammaToStd(*hPostStan):0.4g}')
+    print(f'boost mean={gammaToMean(*bPostStan):0.4g}, std={gammaToStd(*bPostStan):0.4g}')
+    print('## Ebisu v3')
+    print(
+        f'hl0   mean={gammaToMean(*model.prob.initHl):0.4g}, std={gammaToStd(*model.prob.initHl):0.4g}'
+    )
+    print(
+        f'boost mean={gammaToMean(*model.prob.boost):0.4g}, std={gammaToStd(*model.prob.boost):0.4g}'
+    )
