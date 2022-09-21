@@ -40,6 +40,7 @@ def fullBinomialMonteCarlo(
   logweights = np.zeros(size)
 
   hls = hl0s.copy()
+  print("FIXME this is BINARY/Bernoulli, NOT binomial!!!")
   for t, res in zip(ts, results):
     logps = -t / hls * np.log(2)
     success = ebisu.success(res)
