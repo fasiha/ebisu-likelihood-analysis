@@ -101,6 +101,10 @@ def gammaToMeanStd(a, b):
   return (gammaToMean(a, b), gammaToStd(a, b))
 
 
+def pct(actual, expected):
+  return (actual - expected) / expected * 100
+
+
 if __name__ == '__main__':
   df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
@@ -138,24 +142,18 @@ if __name__ == '__main__':
 
     model, debug = ebisu.updateRecallHistory(model, debug=True)
 
-    print(f"""Card {card.key}:
-
-| variable | Ebisu mean | Ebisu std | Stan mean | Stan std |
-|----------|-----------|----------|------------|-----------|
-| init hl  | {gammaToMean(*model.prob.initHl):0.4g} |  {gammaToStd(*model.prob.initHl):0.4g} |  {gammaToMean(*hPostStan):0.4g} | {gammaToStd(*hPostStan):0.4g} |
-| boost    | {gammaToMean(*model.prob.boost):0.4g} | {gammaToStd(*model.prob.boost):0.4g} | {gammaToMean(*bPostStan):0.4g} | {gammaToStd(*bPostStan):0.4g} |
-""")
-    print(f"- Card {card.key}")
-    print('  - Stan')
-    print(f'    - hl0   mean={gammaToMean(*hPostStan):0.4g}, std={gammaToStd(*hPostStan):0.4g}')
-    print(f'    - boost mean={gammaToMean(*bPostStan):0.4g}, std={gammaToStd(*bPostStan):0.4g}')
-    print('  - Ebisu v3')
-    print(
-        f'    - hl0   mean={gammaToMean(*model.prob.initHl):0.4g}, std={gammaToStd(*model.prob.initHl):0.4g}'
-    )
-    print(
-        f'    - boost mean={gammaToMean(*model.prob.boost):0.4g}, std={gammaToStd(*model.prob.boost):0.4g}'
-    )
+    print(f"""- Card {card.key}
+  - Stan
+    - hl0   mean={gammaToMean(*hPostStan):0.4g}, std={gammaToStd(*hPostStan):0.4g}
+    - boost mean={gammaToMean(*bPostStan):0.4g}, std={gammaToStd(*bPostStan):0.4g}
+  - Ebisu v3
+    - hl0   mean={gammaToMean(*model.prob.initHl):0.4g}, std={gammaToStd(*model.prob.initHl):0.4g}
+    - boost mean={gammaToMean(*model.prob.boost):0.4g}, std={gammaToStd(*model.prob.boost):0.4g}
+  - percent difference
+    - hl0 mean: {pct(gammaToMean(*model.prob.initHl), gammaToMean(*hPostStan)):0.3g}%
+    - hl0 std : {pct(gammaToStd(*model.prob.initHl), gammaToStd(*hPostStan)):0.3g}%
+    - boost mean: {pct(gammaToMean(*model.prob.boost), gammaToMean(*bPostStan)):0.3g}%
+    - boost std : {pct(gammaToStd(*model.prob.boost), gammaToStd(*bPostStan)):0.3g}%""")
 
     diagnosis = fit.diagnose()
     if 'no problems detected' not in diagnosis:

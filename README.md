@@ -11,7 +11,11 @@ See [ebisu3_stan.py](./ebisu3_stan.py) for a quick script that
 2. finds a few cards (e.g., a card that you got "right" >85% of reviews),
 3. applies Ebisu v3 and Stan to each.
 
-To run this, you'll need to `python -m pip install cmdstanpy scipy matplotlib pandas` first.
+To run this, you'll need the following setup (for macOS/Unix):
+```bash
+python -m pip install cmdstanpy scipy matplotlib pandas   # install dependencies
+python -c "import cmdstanpy; cmdstanpy.install_cmdstan()" # build cmdstan
+```
 
 Of course [ebisu3_stan.py](./ebisu3_stan.py) can be adapted to use another source of flashcard data (not Anki). It also demonstrates how to run just Ebisu v3.
 
@@ -20,38 +24,57 @@ When I run `python ebisu3_stan.py`, it currently loads four flashcards, printing
 loaded SQL data, 16623 rows
 split flashcards into train/test, 190 cards in train set
 ```
-followed by some Stan output and a few Markdown tables—in the below, the units of `init hl` are hours, and `boost` is unitless.
+followed by some Stan output and a few Markdown lists with numbers—in the below, the units of `init hl` are hours, and `boost` is unitless.
 
-Card 1300038030806:
+- Card 1300038030806
+  - Stan
+    - hl0   mean=20.68, std=12.12
+    - boost mean=2.597, std=0.5506
+  - Ebisu v3
+    - hl0   mean=20.84, std=11.79
+    - boost mean=2.589, std=0.5318
+  - percent difference
+    - hl0 mean: 0.747%
+    - hl0 std : -2.71%
+    - boost mean: -0.317%
+    - boost std : -3.42%
+- Card 1300038030504
+  - Stan
+    - hl0   mean=25.2, std=11.27
+    - boost mean=2.571, std=0.6613
+  - Ebisu v3
+    - hl0   mean=25.13, std=10.49
+    - boost mean=2.565, std=0.639
+  - percent difference
+    - hl0 mean: -0.298%
+    - hl0 std : -6.97%
+    - boost mean: -0.263%
+    - boost std : -3.37%
+- Card 1300038030485
+  - Stan
+    - hl0   mean=28.78, std=13.18
+    - boost mean=2.846, std=0.6973
+  - Ebisu v3
+    - hl0   mean=28.77, std=12.39
+    - boost mean=2.845, std=0.678
+  - percent difference
+    - hl0 mean: -0.0369%
+    - hl0 std : -5.96%
+    - boost mean: -0.0465%
+    - boost std : -2.77%
+- Card 1300038030542
+  - Stan
+    - hl0   mean=26.79, std=12.87
+    - boost mean=2.916, std=0.6967
+  - Ebisu v3
+    - hl0   mean=26.69, std=12.08
+    - boost mean=2.922, std=0.6837
+  - percent difference
+    - hl0 mean: -0.374%
+    - hl0 std : -6.15%
+    - boost mean: 0.193%
+    - boost std : -1.86%
 
-| variable | Ebisu mean | Ebisu std | Stan mean | Stan std |
-|----------|-----------|----------|------------|-----------|
-| init hl  | 20.87 |  11.51 |  20.67 | 11.99 |
-| boost    | 2.589 | 0.532 | 2.598 | 0.5515 |
-
-
-Card 1300038030504:
-
-| variable | Ebisu mean | Ebisu std | Stan mean | Stan std |
-|----------|-----------|----------|------------|-----------|
-| init hl  | 24.96 |  10.24 |  25.18 | 11.19 |
-| boost    | 2.569 | 0.6346 | 2.563 | 0.6609 |
-
-
-Card 1300038030485:
-
-| variable | Ebisu mean | Ebisu std | Stan mean | Stan std |
-|----------|-----------|----------|------------|-----------|
-| init hl  | 28.7 |  12.53 |  28.86 | 13.33 |
-| boost    | 2.844 | 0.6812 | 2.842 | 0.6979 |
-
-
-Card 1300038030542:
-
-| variable | Ebisu mean | Ebisu std | Stan mean | Stan std |
-|----------|-----------|----------|------------|-----------|
-| init hl  | 26.53 |  11.64 |  26.57 | 12.61 |
-| boost    | 2.93 | 0.6813 | 2.923 | 0.6932 |
 
 As you can see, Ebisu and Stan agree quite well on the final estimate of boost's mean and standard deviation, as well as on the initial halflife's mean, but it appears that Ebisu consistently underestimates the initial halflife's standard deviation compared to Stan. This discrepancy doesn't go away even if I crank up the number of samples (the accuracy) of both methods. I'm investigating why this happens.
 
