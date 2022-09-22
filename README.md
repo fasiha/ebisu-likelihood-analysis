@@ -1,4 +1,5 @@
 # Ebisu v3 playground
+See the [Ebisu v3 RFC](https://github.com/fasiha/ebisu/issues/58).
 
 ## Ebisu v3 and Stan
 [Stan](https://mc-stan.org/) is, for our purposes, a Monte Carlo solver. Given a Bayesian model and some data, it computes the model's parameters by very intelligently drawing thousands of samples from the probability distribution of the unknowns after applying all the data. Since Ebisu is a Bayesian model, where for v3 the unknowns are the initial halflife and the ideal boost factor, we can write its model in the Stan format, [ebisu3_binomial.stan](./ebisu3_binomial.stan), and ask Stan to do all the heavy lifting. Then we can compare Stan's estimate of our unknowns to the estimates Ebisu v3 computes.
@@ -53,6 +54,8 @@ Card 1300038030542:
 | boost    | 2.93 | 0.6813 | 2.923 | 0.6932 |
 
 As you can see, Ebisu and Stan agree quite well on the final estimate of boost's mean and standard deviation, as well as on the initial halflife's mean, but it appears that Ebisu consistently underestimates the initial halflife's standard deviation compared to Stan. This discrepancy doesn't go away even if I crank up the number of samples (the accuracy) of both methods. I'm investigating why this happens.
+
+> The reason we don't just use Stan to fit the data instead of all this custom Python code Ebisu has is: although Stan translates its model into C++ and compiles that down to super-optimized binary code, it's style of Monte Carlo sampling (called Markov chain Monte Carlo or MCMC) is orders of magnitude slower than Ebisu v3's implementation. We use every scrap of information about this specific model to make an estimator that's *pretty fast* (leveraging linear solvers and importance sampling), while Stan as a general purpose solver doesn't know all the mathematical tricks that pertain to our model.
 
 ## Likelihood analysis
 See https://github.com/fasiha/ebisu/issues/35#issuecomment-899252582 for context and details.
