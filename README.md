@@ -75,7 +75,7 @@ followed by some Stan output and a few Markdown lists with numbers—in the belo
     - boost mean: -0.0872%
     - boost std : 0.589%
 
-As you can see, Ebisu and Stan agree quite well on both the mean and the standard deviation of the final estimate of both the initial halflife and boost, for these four flashcards at least.
+As you can see, Ebisu and Stan agree quite well on both the mean (very close) and the standard deviation (a bit less close…) of the final estimate of both the initial halflife and boost, for these four flashcards at least.
 
 > The reason we don't just use Stan to fit the data instead of all this custom Python code Ebisu has is: although Stan translates its model into C++ and compiles that down to super-optimized binary code, it's style of Monte Carlo sampling (called Markov chain Monte Carlo or MCMC) is orders of magnitude slower than Ebisu v3's implementation. We use every scrap of information about this specific model to make an estimator that's *pretty fast* (leveraging linear solvers and importance sampling), while Stan as a general purpose solver doesn't know all the mathematical tricks that pertain to our model.
 
