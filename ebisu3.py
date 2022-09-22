@@ -160,6 +160,12 @@ def updateRecall(
   return ret
 
 
+def _increaseGammaVar(a: float, b: float, factor: float):
+  mean = a / b
+  var = a / b**2
+  return _meanVarToGamma(mean, var * factor)
+
+
 def updateRecallHistory(
     model: Model,
     left=0.3,

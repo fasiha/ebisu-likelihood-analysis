@@ -122,13 +122,6 @@ if __name__ == '__main__':
         iter_warmup=20_000,
         iter_sampling=100_000)
 
-    diagnosis = fit.diagnose()
-    if 'no problems detected' not in diagnosis:
-      print(diagnosis)
-
-    pd.plotting.scatter_matrix(fitdf, hist_kwds=dict(bins=100))
-    plt.suptitle(f"# Card {card.key}")
-
     # This is a silly way to fit posterior MCMC samples to two new Gammas but it's
     # how Ebisu3 does it so let's check its math
     hPostStan = ebisu._meanVarToGamma(np.mean(fitdf.hl0), np.var(fitdf.hl0))
@@ -156,3 +149,10 @@ if __name__ == '__main__':
     print(
         f'boost mean={gammaToMean(*model.prob.boost):0.4g}, std={gammaToStd(*model.prob.boost):0.4g}'
     )
+
+    diagnosis = fit.diagnose()
+    if 'no problems detected' not in diagnosis:
+      print(diagnosis)
+
+    pd.plotting.scatter_matrix(fitdf, hist_kwds=dict(bins=100))
+    plt.suptitle(f"# Card {card.key}")

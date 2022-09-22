@@ -32,7 +32,9 @@ transformed parameters {
   array[T] real<lower=0> hl;
   hl[1] = hl0; // halflife for quiz 1
   for (n in 2:T) {
-    real thisBoost = success(successes[n-1], totals[n-1]) ? clampLerp(left * hl[n-1], right * hl[n-1], 1.0, fmax(boost, 1.0), t[n-1]) : 1.0;
+    real thisBoost = success(successes[n-1], totals[n-1])
+      ? clampLerp(left * hl[n-1], right * hl[n-1], 1.0, fmax(boost, 1.0), t[n-1])
+      : 1.0;
     hl[n] = thisBoost * hl[n-1];
   }
 
