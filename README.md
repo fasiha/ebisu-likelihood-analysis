@@ -7,7 +7,7 @@ See the [Ebisu v3 RFC](https://github.com/fasiha/ebisu/issues/58).
 So.
 
 See [ebisu3_stan.py](./ebisu3_stan.py) for a quick script that
-1. loads your `collection.anki2` Anki database of flashcard history, cleans the reviews, converts timestamps to elapsed hours, etc.,
+1. loads your `collection.anki2` Anki database of flashcard history (if you export your Anki deck to an apkg file and unzip that, this collection.anki2 file, which is a SQLite database file, will be inside), cleans the reviews, converts timestamps to elapsed hours, etc.,
 2. finds a few cards (e.g., a card that you got "right" >85% of reviews),
 3. applies Ebisu v3 and Stan to each.
 
