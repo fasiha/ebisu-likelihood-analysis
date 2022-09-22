@@ -119,8 +119,8 @@ if __name__ == '__main__':
         mode=convertMode,
         hlMeanStd=hlMeanStd,
         boostMeanStd=boostMeanStd,
-        iter_warmup=20_000,
-        iter_sampling=100_000)
+        iter_warmup=10_000,
+        iter_sampling=20_000)
 
     # This is a silly way to fit posterior MCMC samples to two new Gammas but it's
     # how Ebisu3 does it so let's check its math
@@ -136,18 +136,25 @@ if __name__ == '__main__':
       s, t = convertAnkiResultToBinomial(ankiResult, convertMode)
       model = ebisu.updateRecall(model, elapsedTime, successes=s, total=t)
 
-    model, debug = ebisu.updateRecallHistory(model, size=50_000, debug=True)
+    model, debug = ebisu.updateRecallHistory(model, debug=True)
 
-    print(f"# Card {card.key}")
-    print('## Stan')
-    print(f'hl0   mean={gammaToMean(*hPostStan):0.4g}, std={gammaToStd(*hPostStan):0.4g}')
-    print(f'boost mean={gammaToMean(*bPostStan):0.4g}, std={gammaToStd(*bPostStan):0.4g}')
-    print('## Ebisu v3')
+    print(f"""Card {card.key}:
+
+| variable | Ebisu mean | Ebisu std | Stan mean | Stan std |
+|----------|-----------|----------|------------|-----------|
+| init hl  | {gammaToMean(*model.prob.initHl):0.4g} |  {gammaToStd(*model.prob.initHl):0.4g} |  {gammaToMean(*hPostStan):0.4g} | {gammaToStd(*hPostStan):0.4g} |
+| boost    | {gammaToMean(*model.prob.boost):0.4g} | {gammaToStd(*model.prob.boost):0.4g} | {gammaToMean(*bPostStan):0.4g} | {gammaToStd(*bPostStan):0.4g} |
+""")
+    print(f"- Card {card.key}")
+    print('  - Stan')
+    print(f'    - hl0   mean={gammaToMean(*hPostStan):0.4g}, std={gammaToStd(*hPostStan):0.4g}')
+    print(f'    - boost mean={gammaToMean(*bPostStan):0.4g}, std={gammaToStd(*bPostStan):0.4g}')
+    print('  - Ebisu v3')
     print(
-        f'hl0   mean={gammaToMean(*model.prob.initHl):0.4g}, std={gammaToStd(*model.prob.initHl):0.4g}'
+        f'    - hl0   mean={gammaToMean(*model.prob.initHl):0.4g}, std={gammaToStd(*model.prob.initHl):0.4g}'
     )
     print(
-        f'boost mean={gammaToMean(*model.prob.boost):0.4g}, std={gammaToStd(*model.prob.boost):0.4g}'
+        f'    - boost mean={gammaToMean(*model.prob.boost):0.4g}, std={gammaToStd(*model.prob.boost):0.4g}'
     )
 
     diagnosis = fit.diagnose()
