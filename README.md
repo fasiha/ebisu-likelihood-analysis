@@ -7,7 +7,7 @@ See the [Ebisu v3 RFC](https://github.com/fasiha/ebisu/issues/58).
 So.
 
 See [ebisu3_stan.py](./ebisu3_stan.py) for a quick script that
-1. loads your `collection.anki2` Anki database of flashcard history and cleans the reviews,
+1. loads your `collection.anki2` Anki database of flashcard history, cleans the reviews, converts timestamps to elapsed hours, etc.,
 2. finds a few cards (e.g., a card that you got "right" >85% of reviews),
 3. applies Ebisu v3 and Stan to each.
 
@@ -20,7 +20,7 @@ When I run `python ebisu3_stan.py`, it currently loads four flashcards, printing
 loaded SQL data, 16623 rows
 split flashcards into train/test, 190 cards in train set
 ```
-followed by some Stan output and a few Markdown tables:
+followed by some Stan output and a few Markdown tables—in the below, the units of `init hl` are hours, and `boost` is unitless.
 
 Card 1300038030806:
 
