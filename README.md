@@ -28,55 +28,54 @@ followed by some Stan output and a few Markdown lists with numbers—in the belo
 
 - Card 1300038030806
   - Stan
-    - hl0   mean=20.68, std=12.12
-    - boost mean=2.597, std=0.5506
+    - hl0   mean=20.74, std=11.32
+    - boost mean=2.594, std=0.5313
   - Ebisu v3
-    - hl0   mean=20.84, std=11.79
-    - boost mean=2.589, std=0.5318
+    - hl0   mean=20.65, std=11.55
+    - boost mean=2.605, std=0.5449
   - percent difference
-    - hl0 mean: 0.747%
-    - hl0 std : -2.71%
-    - boost mean: -0.317%
-    - boost std : -3.42%
+    - hl0 mean: -0.454%
+    - hl0 std : 2.04%
+    - boost mean: 0.402%
+    - boost std : 2.56%
 - Card 1300038030504
   - Stan
-    - hl0   mean=25.2, std=11.27
-    - boost mean=2.571, std=0.6613
+    - hl0   mean=25.19, std=10.48
+    - boost mean=2.57, std=0.636
   - Ebisu v3
-    - hl0   mean=25.13, std=10.49
-    - boost mean=2.565, std=0.639
+    - hl0   mean=25.2, std=10.71
+    - boost mean=2.565, std=0.6402
   - percent difference
-    - hl0 mean: -0.298%
-    - hl0 std : -6.97%
-    - boost mean: -0.263%
-    - boost std : -3.37%
+    - hl0 mean: 0.0543%
+    - hl0 std : 2.26%
+    - boost mean: -0.2%
+    - boost std : 0.662%
 - Card 1300038030485
   - Stan
-    - hl0   mean=28.78, std=13.18
-    - boost mean=2.846, std=0.6973
+    - hl0   mean=28.91, std=12.43
+    - boost mean=2.845, std=0.6788
   - Ebisu v3
-    - hl0   mean=28.77, std=12.39
-    - boost mean=2.845, std=0.678
+    - hl0   mean=28.77, std=12.27
+    - boost mean=2.846, std=0.6797
   - percent difference
-    - hl0 mean: -0.0369%
-    - hl0 std : -5.96%
-    - boost mean: -0.0465%
-    - boost std : -2.77%
+    - hl0 mean: -0.471%
+    - hl0 std : -1.28%
+    - boost mean: 0.00829%
+    - boost std : 0.135%
 - Card 1300038030542
   - Stan
-    - hl0   mean=26.79, std=12.87
-    - boost mean=2.916, std=0.6967
+    - hl0   mean=26.75, std=11.93
+    - boost mean=2.92, std=0.674
   - Ebisu v3
-    - hl0   mean=26.69, std=12.08
-    - boost mean=2.922, std=0.6837
+    - hl0   mean=26.7, std=12.07
+    - boost mean=2.918, std=0.678
   - percent difference
-    - hl0 mean: -0.374%
-    - hl0 std : -6.15%
-    - boost mean: 0.193%
-    - boost std : -1.86%
+    - hl0 mean: -0.184%
+    - hl0 std : 1.2%
+    - boost mean: -0.0872%
+    - boost std : 0.589%
 
-
-As you can see, Ebisu and Stan agree quite well on the final estimate of boost's mean and standard deviation, as well as on the initial halflife's mean, but it appears that Ebisu consistently underestimates the initial halflife's standard deviation compared to Stan. This discrepancy doesn't go away even if I crank up the number of samples (the accuracy) of both methods. I'm investigating why this happens.
+As you can see, Ebisu and Stan agree quite well on both the mean and the standard deviation of the final estimate of both the initial halflife and boost, for these four flashcards at least.
 
 > The reason we don't just use Stan to fit the data instead of all this custom Python code Ebisu has is: although Stan translates its model into C++ and compiles that down to super-optimized binary code, it's style of Monte Carlo sampling (called Markov chain Monte Carlo or MCMC) is orders of magnitude slower than Ebisu v3's implementation. We use every scrap of information about this specific model to make an estimator that's *pretty fast* (leveraging linear solvers and importance sampling), while Stan as a general purpose solver doesn't know all the mathematical tricks that pertain to our model.
 

@@ -1,3 +1,4 @@
+from scipy.stats import gamma as gammarv
 import numpy as np
 import pylab as plt  # type:ignore
 import pandas as pd  # type:ignore
@@ -105,6 +106,11 @@ def pct(actual, expected):
   return (actual - expected) / expected * 100
 
 
+def fitGammaSamples(data):
+  a, _loc, scale = gammarv.fit(data=data, floc=0)
+  return (a, 1 / scale)
+
+
 if __name__ == '__main__':
   df = utils.sqliteToDf('collection.anki2', True)
   print(f'loaded SQL data, {len(df)} rows')
@@ -126,11 +132,10 @@ if __name__ == '__main__':
         iter_warmup=10_000,
         iter_sampling=20_000)
 
-    # This is a silly way to fit posterior MCMC samples to two new Gammas but it's
-    # how Ebisu3 does it so let's check its math
-    hPostStan = ebisu._meanVarToGamma(np.mean(fitdf.hl0), np.var(fitdf.hl0))
-    bPostStan = ebisu._meanVarToGamma(np.mean(fitdf.boost), np.var(fitdf.boost))
+    hPostStan = fitGammaSamples(fitdf.hl0)
+    bPostStan = fitGammaSamples(fitdf.boost)
 
+    # Ebisu time!
     model = ebisu.initModel(
         initHlMean=hlMeanStd[0],
         initHlStd=hlMeanStd[1],
