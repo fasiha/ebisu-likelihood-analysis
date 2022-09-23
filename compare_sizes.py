@@ -22,7 +22,7 @@ def summarize(big: ebisu.Model, small: ebisu.Model):
       this = (big if bigsmall == 'big' else small)
       post = this.prob.initHl if rv == "initHl" else this.prob.boost
       mean = ebisu._gammaToMean(*post)
-      print(f'{bigsmall} | {rv} | {post} | {mean:0.3f} | {this.pred.currentHalflife:0.3f}')
+      print(f'{bigsmall} | {rv} | {post} | {mean:0.3f} | {this.pred.currentHalflifeHours:0.3f}')
 
 
 summarize(

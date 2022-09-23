@@ -14,15 +14,10 @@ from scipy.special import logsumexp  # type: ignore
 import numpy as np
 from typing import Optional, Union
 import math
-import time
 from copy import deepcopy
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 weightedGammaEstimate = ebisu._weightedGammaEstimate
-
-
-def _gammaToVar(alpha: float, beta: float) -> float:
-  return alpha / beta**2
 
 
 def fullBinomialMonteCarlo(
@@ -116,7 +111,6 @@ def _gammaUpdateBinomialMonteCarlo(
 ) -> ebisu.GammaUpdate:
   # Scipy Gamma random variable is inverted: it needs (a, scale=1/b) for the usual (a, b) parameterization
   halflife = gammarv.rvs(a, scale=1 / b, size=size)
-  # pRecall = 2**(-t/halflife) FIXME
   pRecall = np.exp(-t / halflife)
 
   logweight = binomrv.logpmf(k, n, pRecall)  # this is the likelihood of observing the data
@@ -328,7 +322,8 @@ class TestEbisu(unittest.TestCase):
     boostBeta = 3.0
     boostPrior = (boostBeta * boostMean, boostBeta)
 
-    init = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior)
+    now = ebisu._timeMs()
+    init = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior, now=now)
 
     left = 0.3
     right = 1.0
@@ -336,13 +331,14 @@ class TestEbisu(unittest.TestCase):
     for fraction in [0.1, 0.5, 1.0, 2.0, 10.0]:
       for result in [0, 1]:
         elapsedHours = fraction * initHlMean
-        updated = ebisu.updateRecall(init, elapsedHours, result, total=1, left=left, right=right)
+        now += elapsedHours * MILLISECONDS_PER_HOUR
+        updated = ebisu.updateRecall(init, result, total=1, now=now, left=left, right=right)
 
-        msg = f'result={result}, fraction={fraction} => currHl={updated.pred.currentHalflife}'
+        msg = f'result={result}, fraction={fraction} => currHl={updated.pred.currentHalflifeHours}'
         if result:
-          self.assertTrue(updated.pred.currentHalflife >= initHlMean, msg)
+          self.assertTrue(updated.pred.currentHalflifeHours >= initHlMean, msg)
         else:
-          self.assertTrue(updated.pred.currentHalflife <= initHlMean, msg)
+          self.assertTrue(updated.pred.currentHalflifeHours <= initHlMean, msg)
 
         # this is the unboosted posterior update
         u2 = ebisu._gammaUpdateBinomial(initHlPrior[0], initHlPrior[1], elapsedHours, result, 1)
@@ -354,13 +350,13 @@ class TestEbisu(unittest.TestCase):
 
         # clamp 1 <= boost <= boostMean, and only boost successes
         boost = min(boostMean, max(1, boostFraction)) if result else 1
-        self.assertAlmostEqual(updated.pred.currentHalflife, boost * u2.mean)
+        self.assertAlmostEqual(updated.pred.currentHalflifeHours, boost * u2.mean)
 
         for nextResult in [1, 0]:
           for i in range(3):
-            nextElapsed, boost = updated.pred.currentHalflife, boostMean
-            nextUpdate = ebisu.updateRecall(
-                updated, nextElapsed, nextResult, left=left, right=right)
+            nextElapsed, boost = updated.pred.currentHalflifeHours, boostMean
+            now += nextElapsed * MILLISECONDS_PER_HOUR
+            nextUpdate = ebisu.updateRecall(updated, nextResult, now=now, left=left, right=right)
 
             initMean = lambda model: ebisu._gammaToMean(*model.prob.initHl)
 
@@ -371,18 +367,18 @@ class TestEbisu(unittest.TestCase):
               self.assertLess(initMean(nextUpdate), 1.05 * initMean(updated))
 
             # this checks the scaling applied to take the new Gamma to the initial Gamma in simpleUpdateRecall
-            self.assertGreater(nextUpdate.pred.currentHalflife, 1.1 * initMean(nextUpdate))
+            self.assertGreater(nextUpdate.pred.currentHalflifeHours, 1.1 * initMean(nextUpdate))
 
             # meanwhile this checks the scaling to convert the initial halflife Gamma and the current halflife mean
             currHlPrior, _ = ebisu._currentHalflifePrior(updated)
-            self.assertAlmostEqual(updated.pred.currentHalflife,
+            self.assertAlmostEqual(updated.pred.currentHalflifeHours,
                                    gammarv.mean(currHlPrior[0], scale=1 / currHlPrior[1]))
 
             if nextResult:
               # this is an almost tautological test but just as a sanity check, confirm that boosts are being applied?
               next2 = ebisu._gammaUpdateBinomial(currHlPrior[0], currHlPrior[1], nextElapsed,
                                                  nextResult, 1)
-              self.assertAlmostEqual(nextUpdate.pred.currentHalflife, next2.mean * boost)
+              self.assertAlmostEqual(nextUpdate.pred.currentHalflifeHours, next2.mean * boost)
               # don't test this for failures: no boost is applied then
 
             updated = nextUpdate
@@ -400,18 +396,20 @@ class TestEbisu(unittest.TestCase):
     boostBeta = 3.0
     boostPrior = (boostBeta * boostMean, boostBeta)
 
-    base = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior)
+    now = ebisu._timeMs()
+    base = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior, now=now)
 
-    ts = [20., 10., 5., 4., 3., 2., 1.]
+    ts = [20., 10., 5., 4., 3., 2., 1.]  # hours elapsed for each quiz
     correct_ts = [ts[0]]  # just one success
 
     fulls: list[ebisu.Model] = [base]
     for t in ts:
-      tmp = ebisu.updateRecall(fulls[-1], t, int(t in correct_ts))
+      now += t * MILLISECONDS_PER_HOUR
+      tmp = ebisu.updateRecall(fulls[-1], int(t in correct_ts), now=now)
       fulls.append(ebisu.updateRecallHistory(tmp, size=10_000))
     if verbose:
       print('\n'.join([
-          f'FULL curr={m.pred.currentHalflife}, init={ebisu._gammaToMean(*m.prob.initHl)}, bmean={ebisu._gammaToMean(*m.prob.boost)}'
+          f'FULL curr={m.pred.currentHalflifeHours}, init={ebisu._gammaToMean(*m.prob.initHl)}, bmean={ebisu._gammaToMean(*m.prob.boost)}'
           for m in fulls[1:]
       ]))
 
@@ -419,19 +417,20 @@ class TestEbisu(unittest.TestCase):
     # since we have an initial success followed by a string of failures
     m = lambda tup: ebisu._gammaToMean(*tup)
     for left, right in zip(fulls[1:], fulls[2:]):
-      self.assertGreater(left.pred.currentHalflife, right.pred.currentHalflife)
+      self.assertGreater(left.pred.currentHalflifeHours, right.pred.currentHalflifeHours)
       self.assertGreater(m(left.prob.initHl), m(right.prob.initHl))
       self.assertGreaterEqual(m(left.prob.initHl), m(right.prob.initHl))
 
     self.assertLess(m(fulls[-1].prob.boost), 1.0, 'mean boost<1 reached')
 
     # add another failure
-    s = ebisu.updateRecall(fulls[-1], 1.0, 0)
+    now += 1 * MILLISECONDS_PER_HOUR
+    s = ebisu.updateRecall(fulls[-1], 0, now=now)
 
     # even though mean boost<1, the curr halflife should be equal to
     # init halflife (within machine precision) since successes can only boost
     # by scalar >=1.
-    self.assertAlmostEqual(m(s.prob.initHl), s.pred.currentHalflife)
+    self.assertAlmostEqual(m(s.prob.initHl), s.pred.currentHalflifeHours)
 
   def test_full(self, verbose=False):
     initHlMean = 10  # hours
@@ -442,7 +441,8 @@ class TestEbisu(unittest.TestCase):
     boostBeta = 3.0
     boostPrior = (boostBeta * boostMean, boostBeta)
 
-    init = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior)
+    now = ebisu._timeMs()
+    init = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior, now=now)
 
     import mpmath as mp  # type:ignore
 
@@ -451,14 +451,16 @@ class TestEbisu(unittest.TestCase):
     for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False, True]):
       upd = deepcopy(init)
       elapsedHours = fraction * initHlMean
-      upd = ebisu.updateRecall(upd, elapsedHours, result)
+      now += elapsedHours * MILLISECONDS_PER_HOUR
+      upd = ebisu.updateRecall(upd, result, now=now)
 
       for nextResult, nextElapsed, nextTotal in zip(
           [1, 1, 1 if not lastNoisy else (0.8 if result else 0.2)],
           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
           [1, 1, 2 if not lastNoisy else 1],
       ):
-        upd = ebisu.updateRecall(upd, nextElapsed, nextResult, total=nextTotal, q0=0.05)
+        now += nextElapsed * MILLISECONDS_PER_HOUR
+        upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=now)
 
       ### Full Ebisu update (max-likelihood to enhanced Monte Carlo proposal)
       # 100_000 samples is probably WAY TOO MANY for practical purposes but
@@ -511,8 +513,7 @@ class TestEbisu(unittest.TestCase):
       for size in [10_000, 100_000, 1_000_000, 5_000_000]:
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
-            init.prob.boostPrior,
-            upd.quiz.elapseds[-1],
+            init.prob.boostPrior, [r.hoursElapsed for r in upd.quiz.results[-1]],
             upd.quiz.results[-1],
             size=size)
         ab_err = np.max(
