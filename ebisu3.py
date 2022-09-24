@@ -230,7 +230,7 @@ def updateRecallHistory(
   _, extra = _posterior(bmean, hmean, ret, left, right, extra=True)
   ret.pred.currentHalflifeHours = extra['currentHalflife']
   if debug:
-    return ret, dict(kish=betterFit['kish'], stds=betterFit['stds'])
+    return ret, dict(kish=betterFit['kish'], stds=betterFit['stds'], stats=betterFit['stats'])
   return ret
 
 
@@ -472,7 +472,17 @@ def _monteCarloImprove(xprior: tuple[float, float],
       betay=betay,
       kish=_kishLog(logw) if debug else -1,
       stds=[np.std(w * v) for v in [x, y]] if debug else [],
-  )
+      stats=[_weightedMeanVarLogw(logw, samples) for samples in [x, y]] if debug else [])
+
+
+def _weightedMeanVarLogw(logw: np.ndarray, x: np.ndarray) -> tuple[float, float, float, float]:
+  # [weightedMean] https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Mathematical_definition
+  # [weightedVar] https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Weighted_sample_variance
+  logsumexpw = logsumexp(logw)
+  mean = np.exp(logsumexp(logw, b=x) - logsumexpw)
+  var = np.exp(logsumexp(logw, b=(x - mean)**2) - logsumexpw)
+  m2 = np.exp(logsumexp(logw, b=x**2) - logsumexpw)
+  return (mean, var, m2, np.sqrt(m2))
 
 
 def _weightedGammaEstimate(h, w):
@@ -481,7 +491,7 @@ def _weightedGammaEstimate(h, w):
   """
   wsum = fsum(w)
   whsum = fsum(w * h)
-  that2 = np.sum(w * h * np.log(h)) / wsum - whsum / wsum * np.sum(w * np.log(h)) / wsum
+  that2 = fsum(w * h * np.log(h)) / wsum - whsum / wsum * fsum(w * np.log(h)) / wsum
   khat2 = whsum / wsum / that2
   fit = (khat2, 1 / that2)
   return fit

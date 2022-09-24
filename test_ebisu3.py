@@ -18,6 +18,7 @@ from copy import deepcopy
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 weightedGammaEstimate = ebisu._weightedGammaEstimate
+weightedMeanVarLogw = ebisu._weightedMeanVarLogw
 
 
 def fullBinomialMonteCarlo(
@@ -90,15 +91,6 @@ def clampLerp(x1: np.ndarray, x2: np.ndarray, y1: np.ndarray, y2: np.ndarray, x:
   idx = np.logical_and(x1 <= x, x <= x2)
   ret[idx] = (y1 * (1 - mu) + y2 * mu)[idx]
   return ret
-
-
-def weightedMeanVarLogw(logw: np.ndarray, x: np.ndarray) -> tuple[float, float]:
-  # [weightedMean] https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Mathematical_definition
-  # [weightedVar] https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Weighted_sample_variance
-  logsumexpw = logsumexp(logw)
-  mean = np.exp(logsumexp(logw, b=x) - logsumexpw)
-  var = np.exp(logsumexp(logw, b=(x - mean)**2) - logsumexpw)
-  return (mean, var)
 
 
 def _gammaUpdateBinomialMonteCarlo(
@@ -331,8 +323,8 @@ class TestEbisu(unittest.TestCase):
     for fraction in [0.1, 0.5, 1.0, 2.0, 10.0]:
       for result in [0, 1]:
         elapsedHours = fraction * initHlMean
-        now += elapsedHours * MILLISECONDS_PER_HOUR
-        updated = ebisu.updateRecall(init, result, total=1, now=now, left=left, right=right)
+        now2 = now + elapsedHours * MILLISECONDS_PER_HOUR
+        updated = ebisu.updateRecall(init, result, total=1, now=now2, left=left, right=right)
 
         msg = f'result={result}, fraction={fraction} => currHl={updated.pred.currentHalflifeHours}'
         if result:
@@ -346,17 +338,22 @@ class TestEbisu(unittest.TestCase):
         # this uses the two-point formula: y=(y2-y1)/(x2-x1)*(x-x1) + y1, where
         # y represents the boost fraction and x represents the time elapsed as
         # a fraction of the initial halflife
-        boostFraction = (boostMean - 1) / (1 - left) * (fraction - left) + 1
+        boostFraction = (boostMean - 1) / (right - left) * (fraction - left) + 1
 
         # clamp 1 <= boost <= boostMean, and only boost successes
         boost = min(boostMean, max(1, boostFraction)) if result else 1
-        self.assertAlmostEqual(updated.pred.currentHalflifeHours, boost * u2.mean)
+        self.assertAlmostEqual(
+            updated.pred.currentHalflifeHours,
+            boost * u2.mean,
+            msg=f'{fraction=}, {result=}, {boost=}')
 
         for nextResult in [1, 0]:
+          now3 = now2
+
           for i in range(3):
             nextElapsed, boost = updated.pred.currentHalflifeHours, boostMean
-            now += nextElapsed * MILLISECONDS_PER_HOUR
-            nextUpdate = ebisu.updateRecall(updated, nextResult, now=now, left=left, right=right)
+            now3 += nextElapsed * MILLISECONDS_PER_HOUR
+            nextUpdate = ebisu.updateRecall(updated, nextResult, now=now3, left=left, right=right)
 
             initMean = lambda model: ebisu._gammaToMean(*model.prob.initHl)
 
@@ -448,19 +445,20 @@ class TestEbisu(unittest.TestCase):
 
     left = 0.3
     # simulate a variety of 4-quiz trajectories:
-    for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False, True]):
+    # for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False, True]):
+    for fraction, result, lastNoisy in product([0.1], [0], [True]):
       upd = deepcopy(init)
       elapsedHours = fraction * initHlMean
-      now += elapsedHours * MILLISECONDS_PER_HOUR
-      upd = ebisu.updateRecall(upd, result, now=now)
+      thisNow = now + elapsedHours * MILLISECONDS_PER_HOUR
+      upd = ebisu.updateRecall(upd, result, now=thisNow)
 
       for nextResult, nextElapsed, nextTotal in zip(
           [1, 1, 1 if not lastNoisy else (0.8 if result else 0.2)],
           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
           [1, 1, 2 if not lastNoisy else 1],
       ):
-        now += nextElapsed * MILLISECONDS_PER_HOUR
-        upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=now)
+        thisNow += nextElapsed * MILLISECONDS_PER_HOUR
+        upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=thisNow)
 
       ### Full Ebisu update (max-likelihood to enhanced Monte Carlo proposal)
       # 100_000 samples is probably WAY TOO MANY for practical purposes but
@@ -504,9 +502,8 @@ class TestEbisu(unittest.TestCase):
 
       boostMeanInt, hl0MeanInt = integration(5)
 
-      AB_ERR = .05
-      FULL_INT_MEAN_ERR = 0.03
-      MC_INT_MEAN_ERR = 0.03
+      AB_ERR = 0.03
+      MEAN_ERR = 0.03
       ### Raw Monte Carlo simulation (without max likelihood enhanced proposal)
       # Because this method can be inaccurate and slow, try it with a small number
       # of samples and increase it quickly if we don't meet tolerances.
@@ -516,6 +513,16 @@ class TestEbisu(unittest.TestCase):
             init.prob.boostPrior, [r.hoursElapsed for r in upd.quiz.results[-1]],
             upd.quiz.results[-1],
             size=size)
+        full_mc_mean = np.max(
+            relativeError([gammaToMean(*full.prob.boost),
+                           gammaToMean(*full.prob.initHl)],
+                          [mc['statsBoost'][0], mc['statsInitHl'][0]]))
+        full_mc_std = np.max(
+            relativeError([gammaToStd(*full.prob.boost),
+                           gammaToStd(*full.prob.initHl)],
+                          [np.sqrt(mc['statsBoost'][1]),
+                           np.sqrt(mc['statsInitHl'][1])]))
+        ab = [full.prob.boost, full.prob.initHl], [mc["posteriorBoost"], mc["posteriorInitHl"]]
         ab_err = np.max(
             relativeError([full.prob.boost, full.prob.initHl],
                           [mc["posteriorBoost"], mc["posteriorInitHl"]]))
@@ -523,52 +530,74 @@ class TestEbisu(unittest.TestCase):
         mc_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
         full_int_mean_err_b = relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt)
         mc_int_mean_err_b = relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt)
-        if (ab_err < AB_ERR and full_int_mean_err_hl0 < FULL_INT_MEAN_ERR and
-            mc_int_mean_err_hl0 < MC_INT_MEAN_ERR and full_int_mean_err_b < FULL_INT_MEAN_ERR and
-            mc_int_mean_err_b < MC_INT_MEAN_ERR):
+        if (  #full_mc_mean < MEAN_ERR and full_mc_std < STD_ERR and
+            ab_err < AB_ERR and full_int_mean_err_hl0 < MEAN_ERR and
+            mc_int_mean_err_hl0 < MEAN_ERR and full_int_mean_err_b < MEAN_ERR and
+            mc_int_mean_err_b < MEAN_ERR):
           break
-      if verbose:
-        errs = [
-            float(x) for x in [
-                ab_err, full_int_mean_err_hl0, mc_int_mean_err_hl0, full_int_mean_err_b,
-                mc_int_mean_err_b
-            ]
-        ]
-        indiv_ab_err = relativeError([full.prob.boost, full.prob.initHl],
-                                     [mc["posteriorBoost"], mc["posteriorInitHl"]]).ravel()
-
-        print(
-            f"size={size:0.2g}, max={max(errs):0.3f}, errs={', '.join([f'{e:0.3f}' for e in errs])}, ab_err={indiv_ab_err}"
-        )
 
       ### Finally, compare all three updates above.
       # Since numerical integration only gave us means, we can compare its means to
       # (a) full Ebisu update and (b) raw Monte Carlo. Also of course compare the
       # fit (α, β) for both random variables (initial halflife and boost) between
       # full Ebisu vs raw Monte Carlo.
-      ab_err = np.max(
-          relativeError([full.prob.boost, full.prob.initHl],
-                        [mc["posteriorBoost"], mc["posteriorInitHl"]]))
-      full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
-      mc_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
-      full_int_mean_err_b = relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt)
-      mc_int_mean_err_b = relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt)
+      errs = dict(
+          ab_err=ab_err,
+          full_mc_mean=full_mc_mean,
+          full_mc_std=full_mc_std,
+          full_int_mean_err_hl0=full_int_mean_err_hl0,
+          mc_int_mean_err_hl0=mc_int_mean_err_hl0,
+          full_int_mean_err_b=full_int_mean_err_b,
+          mc_int_mean_err_b=mc_int_mean_err_b,
+      )
+      print('ab', ab_err, 'boost', relativeError(fullDebug['stats'][0], mc['statsBoost']), 'inith',
+            relativeError(fullDebug['stats'][1], mc['statsInitHl']))
+      # self.assertLess(
+      #     full_mc_mean, MEAN_ERR,
+      #     f'analytical ~ mc MEAN, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}')
+      # self.assertLess(full_mc_std, STD_ERR,
+      #                 f'analytical ~ mc STD, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}')
+      self.assertLess(
+          ab_err, AB_ERR,
+          f'analytical ~ mc alphabeta, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}')
+      self.assertLess(
+          full_int_mean_err_hl0, MEAN_ERR,
+          f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}'
+      )
+      self.assertLess(
+          mc_int_mean_err_hl0, MEAN_ERR,
+          f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}'
+      )
 
-      self.assertLess(ab_err, AB_ERR, f'analytical ~ mc, {fraction=}, {result=}, {lastNoisy=}')
       self.assertLess(
-          full_int_mean_err_hl0, FULL_INT_MEAN_ERR,
-          f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}')
+          full_int_mean_err_b, MEAN_ERR,
+          f'analytical ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}'
+      )
       self.assertLess(
-          mc_int_mean_err_hl0, MC_INT_MEAN_ERR,
-          f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}')
-
-      self.assertLess(
-          full_int_mean_err_b, FULL_INT_MEAN_ERR,
-          f'analytical ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}')
-      self.assertLess(
-          mc_int_mean_err_b, MC_INT_MEAN_ERR,
-          f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}')
+          mc_int_mean_err_b, MEAN_ERR,
+          f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}'
+      )
     return upd
+
+
+def gammaToMean(a, b):
+  return a / b
+
+
+def gammaToStd(a, b):
+  return np.sqrt(a) / b
+
+
+def gammaToVar(a, b):
+  return a / (b)**2
+
+
+def gammaToMeanStd(a, b):
+  return (gammaToMean(a, b), gammaToStd(a, b))
+
+
+def gammaToMeanVar(a, b):
+  return (gammaToMean(a, b), gammaToVar(a, b))
 
 
 if __name__ == '__main__':
