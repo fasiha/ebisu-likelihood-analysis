@@ -443,17 +443,17 @@ class TestEbisu(unittest.TestCase):
 
     left = 0.3
     # simulate a variety of 4-quiz trajectories:
-    # for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False, True]):
-    for fraction, result, lastNoisy in product([0.1], [0], [False]):
+    # for fraction, result, lastNoisy in product([0.1], [0], [True]):
+    for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False]):
       upd = deepcopy(init)
       elapsedHours = fraction * initHlMean
       thisNow = now + elapsedHours * MILLISECONDS_PER_HOUR
       upd = ebisu.updateRecall(upd, result, now=thisNow)
 
       for nextResult, nextElapsed, nextTotal in zip(
-          [1, 1, 0],
+          [1, 1, 1 if not lastNoisy else (0.8 if result else 0.2)],
           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
-          [1, 1, 1],
+          [1, 1, 2 if not lastNoisy else 1],
       ):
         thisNow += nextElapsed * MILLISECONDS_PER_HOUR
         upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=thisNow)
@@ -466,7 +466,7 @@ class TestEbisu(unittest.TestCase):
       # less accurate model but remain confident that the *means* of this posterior
       # are accurate.
       tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(
-          upd, left=left, size=500_000, debug=True)
+          upd, left=left, size=100_000, debug=True)
       full, fullDebug = tmp
 
       ### Numerical integration via mpmath
