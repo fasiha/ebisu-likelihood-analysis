@@ -320,69 +320,67 @@ class TestEbisu(unittest.TestCase):
     left = 0.3
     right = 1.0
 
-    for fraction in [0.1, 0.5, 1.0, 2.0, 10.0]:
-      for result in [0, 1]:
-        elapsedHours = fraction * initHlMean
-        now2 = now + elapsedHours * MILLISECONDS_PER_HOUR
-        updated = ebisu.updateRecall(init, result, total=1, now=now2, left=left, right=right)
+    for fraction, result in product([0.1, 0.5, 1.0, 2.0, 10.0], [0, 1]):
+      elapsedHours = fraction * initHlMean
+      now2 = now + elapsedHours * MILLISECONDS_PER_HOUR
+      updated = ebisu.updateRecall(init, result, total=1, now=now2, left=left, right=right)
 
-        msg = f'result={result}, fraction={fraction} => currHl={updated.pred.currentHalflifeHours}'
-        if result:
-          self.assertTrue(updated.pred.currentHalflifeHours >= initHlMean, msg)
-        else:
-          self.assertTrue(updated.pred.currentHalflifeHours <= initHlMean, msg)
+      msg = f'result={result}, fraction={fraction} => currHl={updated.pred.currentHalflifeHours}'
+      if result:
+        self.assertTrue(updated.pred.currentHalflifeHours >= initHlMean, msg)
+      else:
+        self.assertTrue(updated.pred.currentHalflifeHours <= initHlMean, msg)
 
-        # this is the unboosted posterior update
-        u2 = ebisu._gammaUpdateBinomial(initHlPrior[0], initHlPrior[1], elapsedHours, result, 1)
+      # this is the unboosted posterior update
+      u2 = ebisu._gammaUpdateBinomial(initHlPrior[0], initHlPrior[1], elapsedHours, result, 1)
 
-        # this uses the two-point formula: y=(y2-y1)/(x2-x1)*(x-x1) + y1, where
-        # y represents the boost fraction and x represents the time elapsed as
-        # a fraction of the initial halflife
-        boostFraction = (boostMean - 1) / (right - left) * (fraction - left) + 1
+      # this uses the two-point formula: y=(y2-y1)/(x2-x1)*(x-x1) + y1, where
+      # y represents the boost fraction and x represents the time elapsed as
+      # a fraction of the initial halflife
+      boostFraction = (boostMean - 1) / (right - left) * (fraction - left) + 1
 
-        # clamp 1 <= boost <= boostMean, and only boost successes
-        boost = min(boostMean, max(1, boostFraction)) if result else 1
-        self.assertAlmostEqual(
-            updated.pred.currentHalflifeHours,
-            boost * u2.mean,
-            msg=f'{fraction=}, {result=}, {boost=}')
+      # clamp 1 <= boost <= boostMean, and only boost successes
+      boost = min(boostMean, max(1, boostFraction)) if result else 1
+      self.assertAlmostEqual(
+          updated.pred.currentHalflifeHours,
+          boost * u2.mean,
+          msg=f'{fraction=}, {result=}, {boost=}')
 
-        for nextResult in [1, 0]:
-          now3 = now2
+      for nextResult in [1, 0]:
+        for i in range(3):
+          nextElapsed, boost = updated.pred.currentHalflifeHours, boostMean
+          now2 += nextElapsed * MILLISECONDS_PER_HOUR
+          nextUpdate = ebisu.updateRecall(updated, nextResult, now=now2, left=left, right=right)
 
-          for i in range(3):
-            nextElapsed, boost = updated.pred.currentHalflifeHours, boostMean
-            now3 += nextElapsed * MILLISECONDS_PER_HOUR
-            nextUpdate = ebisu.updateRecall(updated, nextResult, now=now3, left=left, right=right)
+          initMean = lambda model: ebisu._gammaToMean(*model.prob.initHl)
 
-            initMean = lambda model: ebisu._gammaToMean(*model.prob.initHl)
+          # confirm the initial halflife estimate rose/dropped
+          if nextResult:
+            self.assertGreater(initMean(nextUpdate), 1.05 * initMean(updated))
+          else:
+            self.assertLess(
+                initMean(nextUpdate), 1.05 * initMean(updated), msg=f'{fraction=}, {result=}')
 
-            # confirm the initial halflife estimate rose/dropped
-            if nextResult:
-              self.assertGreater(initMean(nextUpdate), 1.05 * initMean(updated))
-            else:
-              self.assertLess(initMean(nextUpdate), 1.05 * initMean(updated))
+          # this checks the scaling applied to take the new Gamma to the initial Gamma in simpleUpdateRecall
+          self.assertGreater(nextUpdate.pred.currentHalflifeHours, 1.1 * initMean(nextUpdate))
 
-            # this checks the scaling applied to take the new Gamma to the initial Gamma in simpleUpdateRecall
-            self.assertGreater(nextUpdate.pred.currentHalflifeHours, 1.1 * initMean(nextUpdate))
+          # meanwhile this checks the scaling to convert the initial halflife Gamma and the current halflife mean
+          currHlPrior, _ = ebisu._currentHalflifePrior(updated)
+          self.assertAlmostEqual(updated.pred.currentHalflifeHours,
+                                 gammarv.mean(currHlPrior[0], scale=1 / currHlPrior[1]))
 
-            # meanwhile this checks the scaling to convert the initial halflife Gamma and the current halflife mean
-            currHlPrior, _ = ebisu._currentHalflifePrior(updated)
-            self.assertAlmostEqual(updated.pred.currentHalflifeHours,
-                                   gammarv.mean(currHlPrior[0], scale=1 / currHlPrior[1]))
+          if nextResult:
+            # this is an almost tautological test but just as a sanity check, confirm that boosts are being applied?
+            next2 = ebisu._gammaUpdateBinomial(currHlPrior[0], currHlPrior[1], nextElapsed,
+                                               nextResult, 1)
+            self.assertAlmostEqual(nextUpdate.pred.currentHalflifeHours, next2.mean * boost)
+            # don't test this for failures: no boost is applied then
 
-            if nextResult:
-              # this is an almost tautological test but just as a sanity check, confirm that boosts are being applied?
-              next2 = ebisu._gammaUpdateBinomial(currHlPrior[0], currHlPrior[1], nextElapsed,
-                                                 nextResult, 1)
-              self.assertAlmostEqual(nextUpdate.pred.currentHalflifeHours, next2.mean * boost)
-              # don't test this for failures: no boost is applied then
+          updated = nextUpdate
 
-            updated = nextUpdate
-
-            # don't bother to check alpha/beta: a test in Python will just be tautological
-            # (we'll repeat the same thing in the test as in the code). That has to happen
-            # via Stan?
+        # don't bother to check alpha/beta: a test in Python will just be tautological
+        # (we'll repeat the same thing in the test as in the code). That has to happen
+        # via Stan?
 
   def test_1_then_0s(self, verbose=False):
     initHlMean = 10  # hours
@@ -468,7 +466,7 @@ class TestEbisu(unittest.TestCase):
       # less accurate model but remain confident that the *means* of this posterior
       # are accurate.
       tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(
-          upd, left=left, size=100_000, debug=True)
+          upd, left=left, size=500_000, debug=True)
       full, fullDebug = tmp
 
       ### Numerical integration via mpmath
