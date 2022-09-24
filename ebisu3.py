@@ -1,7 +1,7 @@
 from scipy.linalg import lstsq  #type:ignore
 from math import fsum
 import numpy as np  # type:ignore
-from scipy.stats import gamma as gammarv  # type: ignore
+from scipy.stats import gamma as gammarv, bernoulli as bernrv  # type: ignore
 from scipy.special import kv, kve, gammaln, gamma, betaln, logsumexp  #type: ignore
 from dataclasses import dataclass
 from time import time_ns
@@ -379,6 +379,24 @@ def clampLerp(x1: float, x2: float, y1: float, y2: float, x: float) -> float:
   return min(y2, max(y1, y))
 
 
+@cache
+def _logFactorial(n: int) -> float:
+  return gammaln(n + 1)
+
+
+def _logComb(n: int, k: int) -> float:
+  return _logFactorial(n) - _logFactorial(k) - _logFactorial(n - k)
+
+
+def _logBinomPmfLogp(n: int, k: int, logp: float) -> float:
+  assert (n >= k >= 0)
+  logcomb = _logComb(n, k)
+  if n - k > 0:
+    logq = np.log(-np.expm1(logp))
+    return logcomb + k * logp + (n - k) * logq
+  return logcomb + k * logp
+
+
 def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=False):
   "log posterior up to a constant offset"
   ab, bb = ret.prob.boostPrior
@@ -395,22 +413,19 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=
     if isinstance(res, NoisyBinaryResult):
       # noisy binary/Bernoulli
       logPfail = np.log(-np.expm1(logPrecall))
-      z = success(res)
+      z = int(success(res))
+      # Stan has this nice function, log_mix, which is perfect for this...
+      loglik.append(
+          logsumexp([logPrecall + bernrv.logpmf(z, res.q1), logPfail + bernrv.logpmf(z, res.q0)]))
       if z:
-        # Stan has this nice function, log_mix, which is perfect for this...
-        loglik.append(logsumexp([logPrecall + np.log(res.q1), logPfail + np.log(res.q0)]))
         currHalflife *= clampLerp(left * currHalflife, right * currHalflife, 1, max(1, b),
                                   res.hoursElapsed)
-      else:
-        loglik.append(logsumexp([logPrecall + np.log(1 - res.q1), logPfail + np.log(1 - res.q0)]))
     else:
       # binomial
+      loglik.append(_logBinomPmfLogp(res.total, res.successes, logPrecall))
       if success(res):
-        loglik.append(logPrecall)
         currHalflife *= clampLerp(left * currHalflife, right * currHalflife, 1, max(1, b),
                                   res.hoursElapsed)
-      else:
-        loglik.append(np.log(-np.expm1(logPrecall)))
   logposterior = fsum(loglik + [logprior])
   if extra:
     return logposterior, dict(currentHalflife=currHalflife)

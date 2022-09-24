@@ -36,23 +36,23 @@ def fullBinomialMonteCarlo(
   logweights = np.zeros(size)
 
   hls = hl0s.copy()
-  print("FIXME this is BINARY/Bernoulli, NOT binomial!!!")
   for t, res in zip(ts, results):
     logps = -t / hls * np.log(2)
     success = ebisu.success(res)
     if isinstance(res, ebisu.BinomialResult):
-      if success:
-        logweights += logps
-      else:
-        logweights += np.log(-np.expm1(logps))
+      logweights += ebisu._logBinomPmfLogp(res.total, res.successes, logps)
       # This is the likelihood of observing the data, and is more accurate than
       # `binomrv.logpmf(k, n, pRecall)` since `pRecall` is already in log domain
     else:
       q0, q1 = res.q0, res.q1
-      if not success:
-        q0, q1 = 1 - q0, 1 - q1
       logpfails = np.log(-np.expm1(logps))
-      logweights += logsumexp(np.vstack([logps + np.log(q1), logpfails + np.log(q0)]), axis=0)
+      # exact transcription of log_mix from Stan and https://github.com/fasiha/ebisu/issues/52
+      logweights += logsumexp(
+          np.vstack([
+              logps + bernoulli.logpmf(int(success), q1),
+              logpfails + bernoulli.logpmf(int(success), q0)
+          ]),
+          axis=0)
     # Apply boost for successful quizzes
     if success:  # reuse same rule as ebisu
       hls *= clampLerp(left * hls, right * hls, np.ones(size), np.maximum(boosts, 1.0), t)
@@ -446,16 +446,16 @@ class TestEbisu(unittest.TestCase):
     left = 0.3
     # simulate a variety of 4-quiz trajectories:
     # for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False, True]):
-    for fraction, result, lastNoisy in product([0.1], [0], [True]):
+    for fraction, result, lastNoisy in product([0.1], [0], [False]):
       upd = deepcopy(init)
       elapsedHours = fraction * initHlMean
       thisNow = now + elapsedHours * MILLISECONDS_PER_HOUR
       upd = ebisu.updateRecall(upd, result, now=thisNow)
 
       for nextResult, nextElapsed, nextTotal in zip(
-          [1, 1, 1 if not lastNoisy else (0.8 if result else 0.2)],
+          [1, 1, 0],
           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
-          [1, 1, 2 if not lastNoisy else 1],
+          [1, 1, 1],
       ):
         thisNow += nextElapsed * MILLISECONDS_PER_HOUR
         upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=thisNow)
@@ -508,6 +508,7 @@ class TestEbisu(unittest.TestCase):
       # Because this method can be inaccurate and slow, try it with a small number
       # of samples and increase it quickly if we don't meet tolerances.
       for size in [10_000, 100_000, 1_000_000, 5_000_000]:
+        print('!')
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
             init.prob.boostPrior, [r.hoursElapsed for r in upd.quiz.results[-1]],
