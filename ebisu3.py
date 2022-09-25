@@ -1,4 +1,5 @@
 from scipy.linalg import lstsq  #type:ignore
+from scipy.optimize import minimize  #type:ignore
 from math import fsum
 import numpy as np  # type:ignore
 from scipy.stats import gamma as gammarv, bernoulli as bernrv  # type: ignore
@@ -230,7 +231,13 @@ def updateRecallHistory(
   _, extra = _posterior(bmean, hmean, ret, left, right, extra=True)
   ret.pred.currentHalflifeHours = extra['currentHalflife']
   if debug:
-    return ret, dict(kish=betterFit['kish'], stds=betterFit['stds'], stats=betterFit['stats'])
+    return ret, dict(
+        kish=betterFit['kish'],
+        stds=betterFit['stds'],
+        stats=betterFit['stats'],
+        closedFit=betterFit['closedFit'],
+        maxLikFit=betterFit['maxLikFit'],
+    )
   return ret
 
 
@@ -487,7 +494,10 @@ def _monteCarloImprove(xprior: tuple[float, float],
       betay=betay,
       kish=_kishLog(logw) if debug else -1,
       stds=[np.std(w * v) for v in [x, y]] if debug else [],
-      stats=[_weightedMeanVarLogw(logw, samples) for samples in [x, y]] if debug else [])
+      stats=[_weightedMeanVarLogw(logw, samples) for samples in [x, y]] if debug else [],
+      closedFit=[(alphax, betax), (alphay, betay)] if debug else [],
+      maxLikFit=[_weightedGammaEstimateMaxLik(z, w) for z in [x, y]] if debug else [],
+  )
 
 
 def _weightedMeanVarLogw(logw: np.ndarray, x: np.ndarray) -> tuple[float, float, float, float]:
@@ -510,6 +520,25 @@ def _weightedGammaEstimate(h, w):
   khat2 = whsum / wsum / that2
   fit = (khat2, 1 / that2)
   return fit
+
+
+def _weightedGammaEstimateMaxLik(x, w):
+  "Maximum likelihood Gamma fit given weighted samples"
+  est = _weightedGammaEstimate(x, w)
+  wsum = fsum(w)
+  meanLnX = fsum(np.log(x) * w) / wsum
+  meanX = fsum(w * x) / wsum
+  n = len(x)
+
+  def opt(input):
+    k = input[0]
+    lik = (k - 1) * n * meanLnX - n * k - n * k * np.log(meanX / k) - n * gammaln(k)
+    return -lik
+
+  res = minimize(opt, [est[0]], bounds=[[.01, np.inf]])
+  k = res.x[0]
+  b = k / meanX  # b = 1/theta, theta = meanX / k
+  return (k, b)
 
 
 def _kishLog(logweights) -> float:

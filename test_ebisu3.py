@@ -511,7 +511,7 @@ class TestEbisu(unittest.TestCase):
       ### Raw Monte Carlo simulation (without max likelihood enhanced proposal)
       # Because this method can be inaccurate and slow, try it with a small number
       # of samples and increase it quickly if we don't meet tolerances.
-      for size in [10_000, 100_000, 1_000_000, 5_000_000]:
+      for size in [1_000_000, 5_000_000]:
         print('!')
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
@@ -557,14 +557,32 @@ class TestEbisu(unittest.TestCase):
       )
 
       print('ab', ab_err)
-      print('boost (ebisu/mc)', relativeError(bEbisuSamplesStats, mc['statsBoost']))
-      print('inith (ebisu/mc)', relativeError(hEbisuSamplesStats, mc['statsInitHl']))
+      print('boost (ebisuSamp/mc)', relativeError(bEbisuSamplesStats, mc['statsBoost']))
+      print('inith (ebisuSamp/mc)', relativeError(hEbisuSamplesStats, mc['statsInitHl']))
       print('boost ebisuSamp/int', relativeError(bEbisuSamplesStats, np.array(bInt, dtype=float)))
       print('inithl ebisuSamp/int', relativeError(hEbisuSamplesStats, np.array(hInt, dtype=float)))
-      print('boost ebisu/int',
+
+      print('Closed')
+      print('boost ebisuClosed/mc', relativeError(gammaToStats(*full.prob.boost), mc['statsBoost']))
+      print('inithl ebisuClosed/mc',
+            relativeError(gammaToStats(*full.prob.initHl), mc['statsInitHl']))
+      print('boost ebisuClosed/int',
             relativeError(gammaToStats(*full.prob.boost), np.array(bInt, dtype=float)))
-      print('inithl ebisu/int',
+      print('inithl ebisuClosed/int',
             relativeError(gammaToStats(*full.prob.initHl), np.array(hInt, dtype=float)))
+
+      print('ebisuMaxLik')
+      print('boost ebisuMaxLik/mc',
+            relativeError(gammaToStats(*fullDebug['maxLikFit'][0]), mc['statsBoost']))
+      print('inithl ebisuMaxLik/mc',
+            relativeError(gammaToStats(*fullDebug['maxLikFit'][1]), mc['statsInitHl']))
+      print('boost ebisuMaxLik/int',
+            relativeError(gammaToStats(*fullDebug['maxLikFit'][0]), np.array(bInt, dtype=float)))
+      print('inithl ebisuMaxLik/int',
+            relativeError(gammaToStats(*fullDebug['maxLikFit'][1]), np.array(hInt, dtype=float)))
+
+      # print('ebisuFinal', [full.prob.boost, full.prob.initHl])
+      # print('ebisuSampMl', fullDebug['maxLikFit'])
 
       # self.assertLess(
       #     full_mc_mean, MEAN_ERR,
@@ -613,13 +631,15 @@ def gammaToMeanStd(a, b):
 def gammaToMeanVar(a, b):
   return (gammaToMean(a, b), gammaToVar(a, b))
 
+
 def gammaToStats(a: float, b: float):
   mean = gammaToMean(a, b)
   var = gammaToVar(a, b)
   k = a
   t = 1 / b
-  m2 = t**2 * k * (k + 1) # second non-central moment
+  m2 = t**2 * k * (k + 1)  # second non-central moment
   return (mean, var, m2, np.sqrt(m2))
+
 
 if __name__ == '__main__':
   import os
