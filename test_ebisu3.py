@@ -443,7 +443,6 @@ class TestEbisu(unittest.TestCase):
 
     left = 0.3
     # simulate a variety of 4-quiz trajectories:
-    # for fraction, result, lastNoisy in product([0.1], [0], [True]):
     for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False]):
       upd = deepcopy(init)
       elapsedHours = fraction * initHlMean
@@ -451,22 +450,22 @@ class TestEbisu(unittest.TestCase):
       upd = ebisu.updateRecall(upd, result, now=thisNow)
 
       for nextResult, nextElapsed, nextTotal in zip(
-          [1, 1, 1 if not lastNoisy else (0.8 if result else 0.2)],
+          [1, 1, 1],
           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
-          [1, 1, 2 if not lastNoisy else 1],
+          [1, 2, 2],
       ):
         thisNow += nextElapsed * MILLISECONDS_PER_HOUR
         upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=thisNow)
 
       ### Full Ebisu update (max-likelihood to enhanced Monte Carlo proposal)
-      # 100_000 samples is probably WAY TOO MANY for practical purposes but
+      # This many samples is probably WAY TOO MANY for practical purposes but
       # here I want to ascertain that this approach is correct as you crank up
       # the number of samples. If we have confidence that this estimator behaves
       # correctly, we can in practice use 1_000 or 10_000 samples and accept a
       # less accurate model but remain confident that the *means* of this posterior
       # are accurate.
       tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(
-          upd, left=left, size=100_000, debug=True)
+          upd, left=left, size=500_000, debug=True)
       full, fullDebug = tmp
 
       ### Numerical integration via mpmath
