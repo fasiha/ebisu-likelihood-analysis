@@ -505,8 +505,8 @@ def _weightedMeanVarLogw(logw: np.ndarray, x: np.ndarray) -> tuple[float, float,
   # [weightedVar] https://en.wikipedia.org/w/index.php?title=Weighted_arithmetic_mean&oldid=770608018#Weighted_sample_variance
   logsumexpw = logsumexp(logw)
   mean = np.exp(logsumexp(logw, b=x) - logsumexpw)
-  var = np.exp(logsumexp(logw, b=(x - mean)**2) - logsumexpw)
   m2 = np.exp(logsumexp(logw, b=x**2) - logsumexpw)
+  var = m2 - mean**2
   return (mean, var, m2, np.sqrt(m2))
 
 

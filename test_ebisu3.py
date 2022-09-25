@@ -503,42 +503,35 @@ class TestEbisu(unittest.TestCase):
         return [(boostMeanInt,), (hl0MeanInt,)]
 
       bInt, hInt = integration(6, True)
-      boostMeanInt = bInt[0]
-      hl0MeanInt = hInt[0]
 
       AB_ERR = 0.03
-      MEAN_ERR = 0.03
+      MEAN_ERR = 0.01
+      M2_ERR = 0.011
+      M2_FIT_ERR = 0.05
+      # TRUE_POST_VAR_ERR = 0.01
+      # FIT_VAR_ERR = 0.05
+
       ### Raw Monte Carlo simulation (without max likelihood enhanced proposal)
       # Because this method can be inaccurate and slow, try it with a small number
       # of samples and increase it quickly if we don't meet tolerances.
-      for size in [1_000_000, 5_000_000]:
+      for size in [1_000_000, 20_000_000]:
         print('!')
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
             init.prob.boostPrior, [r.hoursElapsed for r in upd.quiz.results[-1]],
             upd.quiz.results[-1],
             size=size)
-        full_mc_mean = np.max(
-            relativeError([gammaToMean(*full.prob.boost),
-                           gammaToMean(*full.prob.initHl)],
-                          [mc['statsBoost'][0], mc['statsInitHl'][0]]))
-        full_mc_std = np.max(
-            relativeError([gammaToStd(*full.prob.boost),
-                           gammaToStd(*full.prob.initHl)],
-                          [np.sqrt(mc['statsBoost'][1]),
-                           np.sqrt(mc['statsInitHl'][1])]))
-        ab = [full.prob.boost, full.prob.initHl], [mc["posteriorBoost"], mc["posteriorInitHl"]]
         ab_err = np.max(
             relativeError([full.prob.boost, full.prob.initHl],
                           [mc["posteriorBoost"], mc["posteriorInitHl"]]))
-        full_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*full.prob.initHl), hl0MeanInt)
-        mc_int_mean_err_hl0 = relativeError(ebisu._gammaToMean(*mc["posteriorInitHl"]), hl0MeanInt)
-        full_int_mean_err_b = relativeError(ebisu._gammaToMean(*full.prob.boost), boostMeanInt)
-        mc_int_mean_err_b = relativeError(ebisu._gammaToMean(*mc["posteriorBoost"]), boostMeanInt)
-        if (  #full_mc_mean < MEAN_ERR and full_mc_std < STD_ERR and
-            ab_err < AB_ERR and full_int_mean_err_hl0 < MEAN_ERR and
-            mc_int_mean_err_hl0 < MEAN_ERR and full_int_mean_err_b < MEAN_ERR and
-            mc_int_mean_err_b < MEAN_ERR):
+        mean_err = max(
+            relativeError(bEbisuSamplesStats[0], mc['statsBoost'][0]),
+            relativeError(hEbisuSamplesStats[0], mc['statsInitHl'][0]))
+        m2_err = max(
+            relativeError(bEbisuSamplesStats[0], mc['statsBoost'][0]),
+            relativeError(hEbisuSamplesStats[0], mc['statsInitHl'][0]))
+
+        if (ab_err < AB_ERR and mean_err < MEAN_ERR and m2_err < M2_ERR):
           break
 
       ### Finally, compare all three updates above.
@@ -546,68 +539,67 @@ class TestEbisu(unittest.TestCase):
       # (a) full Ebisu update and (b) raw Monte Carlo. Also of course compare the
       # fit (α, β) for both random variables (initial halflife and boost) between
       # full Ebisu vs raw Monte Carlo.
-      errs = dict(
-          ab_err=ab_err,
-          full_mc_mean=full_mc_mean,
-          full_mc_std=full_mc_std,
-          full_int_mean_err_hl0=full_int_mean_err_hl0,
-          mc_int_mean_err_hl0=mc_int_mean_err_hl0,
-          full_int_mean_err_b=full_int_mean_err_b,
-          mc_int_mean_err_b=mc_int_mean_err_b,
-      )
 
-      print('ab', ab_err)
+      print(
+          'ab',
+          relativeError([full.prob.boost, full.prob.initHl],
+                        [mc["posteriorBoost"], mc["posteriorInitHl"]]))
       print('boost (ebisuSamp/mc)', relativeError(bEbisuSamplesStats, mc['statsBoost']))
       print('inith (ebisuSamp/mc)', relativeError(hEbisuSamplesStats, mc['statsInitHl']))
       print('boost ebisuSamp/int', relativeError(bEbisuSamplesStats, np.array(bInt, dtype=float)))
       print('inithl ebisuSamp/int', relativeError(hEbisuSamplesStats, np.array(hInt, dtype=float)))
+      print('Ebisu Gamma fit')
+      print('boost eSamp/eClosed', relativeError(bEbisuSamplesStats,
+                                                 gammaToStats(*full.prob.boost)))
+      print('inithl eSamp/eClosed',
+            relativeError(hEbisuSamplesStats, gammaToStats(*full.prob.initHl)))
+      print('boost eSamp/eMaxlik',
+            relativeError(bEbisuSamplesStats, gammaToStats(*fullDebug['maxLikFit'][0])))
+      print('inithl eSamp/eMaxlik',
+            relativeError(hEbisuSamplesStats, gammaToStats(*fullDebug['maxLikFit'][1])))
 
-      print('Closed')
-      print('boost ebisuClosed/mc', relativeError(gammaToStats(*full.prob.boost), mc['statsBoost']))
-      print('inithl ebisuClosed/mc',
-            relativeError(gammaToStats(*full.prob.initHl), mc['statsInitHl']))
-      print('boost ebisuClosed/int',
-            relativeError(gammaToStats(*full.prob.boost), np.array(bInt, dtype=float)))
-      print('inithl ebisuClosed/int',
-            relativeError(gammaToStats(*full.prob.initHl), np.array(hInt, dtype=float)))
+      # Ebisu posterior weighted samples vs numerical integration (nothing to do with Monte Carlo)
+      self.assertLessEqual(
+          max(
+              relativeError(bEbisuSamplesStats[0], bInt[0]),
+              relativeError(hEbisuSamplesStats[0], hInt[0])), MEAN_ERR,
+          f'mean(ebisu posterior samples) = numerical integral mean, {fraction=}, {result=}, {lastNoisy=}'
+      )
+      self.assertLessEqual(
+          max(
+              relativeError(bEbisuSamplesStats[2], bInt[2]),
+              relativeError(hEbisuSamplesStats[2], hInt[2])), M2_ERR,
+          f'2nd moment(ebisu posterior samples) = numerical integral 2nd moment, {fraction=}, {result=}, {lastNoisy=}'
+      )
 
-      print('ebisuMaxLik')
-      print('boost ebisuMaxLik/mc',
-            relativeError(gammaToStats(*fullDebug['maxLikFit'][0]), mc['statsBoost']))
-      print('inithl ebisuMaxLik/mc',
-            relativeError(gammaToStats(*fullDebug['maxLikFit'][1]), mc['statsInitHl']))
-      print('boost ebisuMaxLik/int',
-            relativeError(gammaToStats(*fullDebug['maxLikFit'][0]), np.array(bInt, dtype=float)))
-      print('inithl ebisuMaxLik/int',
-            relativeError(gammaToStats(*fullDebug['maxLikFit'][1]), np.array(hInt, dtype=float)))
+      # Ebisu posterior Gamma fit vs Ebisu posterior samples (nothing to do with Monte Carlo)
+      bEbisu = gammaToStats(*full.prob.boost)
+      hEbisu = gammaToStats(*full.prob.initHl)
+      self.assertLessEqual(
+          max(
+              relativeError(bEbisuSamplesStats[0], bEbisu[0]),
+              relativeError(hEbisuSamplesStats[0], hEbisu[0])), MEAN_ERR,
+          f'mean(ebisu posterior samples) = mean(ebisu Gamma fit), {fraction=}, {result=}, {lastNoisy=}'
+      )
+      # FIXME TODO why is sometimes 2nd moment so bad between posterior samples and fit?
+      # self.assertLessEqual(
+      #     max(
+      #         relativeError(bEbisuSamplesStats[2], bEbisu[2]),
+      #         relativeError(hEbisuSamplesStats[2], hEbisu[2])), M2_FIT_ERR,
+      #     f'2nd moment(ebisu posterior samples) = 2nd moment(ebisu Gamma fit), {fraction=}, {result=}, {lastNoisy=}'
+      # )
 
-      # print('ebisuFinal', [full.prob.boost, full.prob.initHl])
-      # print('ebisuSampMl', fullDebug['maxLikFit'])
-
-      # self.assertLess(
-      #     full_mc_mean, MEAN_ERR,
-      #     f'analytical ~ mc MEAN, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}')
-      # self.assertLess(full_mc_std, STD_ERR,
-      #                 f'analytical ~ mc STD, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}')
+      # Finally get to Monte Carlo
       self.assertLess(
           ab_err, AB_ERR,
-          f'analytical ~ mc alphabeta, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}')
+          f'Ebisu Gamma fit αβ = Monte Carlo Gamma fit αβ, {fraction=}, {result=}, {lastNoisy=}')
       self.assertLess(
-          full_int_mean_err_hl0, MEAN_ERR,
-          f'analytical ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}'
+          mean_err, MEAN_ERR,
+          f'Ebisu Gamma fit mean = Monte Carlo posterior mean, {fraction=}, {result=}, {lastNoisy=}'
       )
       self.assertLess(
-          mc_int_mean_err_hl0, MEAN_ERR,
-          f'monte carlo ~ numerical integration mean hl0, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}'
-      )
-
-      self.assertLess(
-          full_int_mean_err_b, MEAN_ERR,
-          f'analytical ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}'
-      )
-      self.assertLess(
-          mc_int_mean_err_b, MEAN_ERR,
-          f'monte carlo ~ numerical integration mean boost, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}'
+          m2_err, M2_ERR,
+          f'Ebisu Gamma fit 2nd moment = Monte Carlo posterior 2nd moment, {fraction=}, {result=}, {lastNoisy=}'
       )
     return upd
 
