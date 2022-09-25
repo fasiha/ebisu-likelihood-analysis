@@ -467,6 +467,7 @@ class TestEbisu(unittest.TestCase):
       tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(
           upd, left=left, size=500_000, debug=True)
       full, fullDebug = tmp
+      bEbisuSamplesStats, hEbisuSamplesStats = fullDebug['stats']
 
       ### Numerical integration via mpmath
       # This method stops being accurate when you have tens of quizzes but it's matches
@@ -493,11 +494,17 @@ class TestEbisu(unittest.TestCase):
 
         boostMeanInt, hl0MeanInt = numb / den, numh / den
         if wantVar:
-          boostVarInt, hl0VarInt = numb2 / den - boostMeanInt**2, numh2 / den - hl0MeanInt**2
-          return boostMeanInt, hl0MeanInt, boostVarInt, hl0VarInt
-        return boostMeanInt, hl0MeanInt
+          bSecondMoment = numb2 / den
+          hSecondMoment = numh2 / den
 
-      boostMeanInt, hl0MeanInt = integration(5)
+          boostVarInt, hl0VarInt = bSecondMoment - boostMeanInt**2, hSecondMoment - hl0MeanInt**2
+          return [(boostMeanInt, boostVarInt, bSecondMoment, mp.sqrt(bSecondMoment)),
+                  (hl0MeanInt, hl0VarInt, hSecondMoment, mp.sqrt(hSecondMoment))]
+        return [(boostMeanInt,), (hl0MeanInt,)]
+
+      bInt, hInt = integration(6, True)
+      boostMeanInt = bInt[0]
+      hl0MeanInt = hInt[0]
 
       AB_ERR = 0.03
       MEAN_ERR = 0.03
@@ -548,8 +555,17 @@ class TestEbisu(unittest.TestCase):
           full_int_mean_err_b=full_int_mean_err_b,
           mc_int_mean_err_b=mc_int_mean_err_b,
       )
-      print('ab', ab_err, 'boost', relativeError(fullDebug['stats'][0], mc['statsBoost']), 'inith',
-            relativeError(fullDebug['stats'][1], mc['statsInitHl']))
+
+      print('ab', ab_err)
+      print('boost (ebisu/mc)', relativeError(bEbisuSamplesStats, mc['statsBoost']))
+      print('inith (ebisu/mc)', relativeError(hEbisuSamplesStats, mc['statsInitHl']))
+      print('boost ebisuSamp/int', relativeError(bEbisuSamplesStats, np.array(bInt, dtype=float)))
+      print('inithl ebisuSamp/int', relativeError(hEbisuSamplesStats, np.array(hInt, dtype=float)))
+      print('boost ebisu/int',
+            relativeError(gammaToStats(*full.prob.boost), np.array(bInt, dtype=float)))
+      print('inithl ebisu/int',
+            relativeError(gammaToStats(*full.prob.initHl), np.array(hInt, dtype=float)))
+
       # self.assertLess(
       #     full_mc_mean, MEAN_ERR,
       #     f'analytical ~ mc MEAN, {fraction=}, {result=}, {lastNoisy=}, {ab=}, {errs=}')
@@ -597,6 +613,13 @@ def gammaToMeanStd(a, b):
 def gammaToMeanVar(a, b):
   return (gammaToMean(a, b), gammaToVar(a, b))
 
+def gammaToStats(a: float, b: float):
+  mean = gammaToMean(a, b)
+  var = gammaToVar(a, b)
+  k = a
+  t = 1 / b
+  m2 = t**2 * k * (k + 1) # second non-central moment
+  return (mean, var, m2, np.sqrt(m2))
 
 if __name__ == '__main__':
   import os
