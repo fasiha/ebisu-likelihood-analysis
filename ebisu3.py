@@ -2,7 +2,7 @@ from scipy.linalg import lstsq  #type:ignore
 from scipy.optimize import minimize  #type:ignore
 from math import fsum
 import numpy as np  # type:ignore
-from scipy.stats import gamma as gammarv, bernoulli as bernrv  # type: ignore
+from scipy.stats import gamma as gammarv  # type: ignore
 from scipy.special import kv, kve, gammaln, gamma, betaln, logsumexp  #type: ignore
 from dataclasses import dataclass
 from time import time_ns
@@ -33,7 +33,7 @@ def success(res: Result) -> bool:
   if isinstance(res, NoisyBinaryResult):
     return res.result > 0.5
   elif isinstance(res, BinomialResult):
-    return res.successes >= res.total / 2
+    return res.successes * 2 > res.total
   else:
     raise Exception("unknown result type")
 
@@ -195,6 +195,31 @@ def updateRecall(
   return ret
 
 
+def gammaToMean(a, b):
+  return a / b
+
+
+def gammaToStd(a, b):
+  return np.sqrt(a) / b
+
+
+def gammaToVar(a, b):
+  return a / (b)**2
+
+
+def gammaToMeanStd(a, b):
+  return (gammaToMean(a, b), gammaToStd(a, b))
+
+
+def gammaToMeanVar(a, b):
+  return (gammaToMean(a, b), gammaToVar(a, b))
+
+
+def expandGamma(a: float, b: float, factor: float) -> tuple[float, float]:
+  m, v = gammaToMeanVar(a, b)
+  return _meanVarToGamma(m, v * factor)
+
+
 def updateRecallHistory(
     model: Model,
     left=0.3,
@@ -212,16 +237,22 @@ def updateRecallHistory(
   minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
 
   posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
-  bs, hs = np.random.rand(2, 400)
+  n = 600
+  bs, hs = np.random.rand(2, n)
   bs = bs * (maxBoost - minBoost) + minBoost
   hs = hs * (maxHalflife - minHalflife) + minHalflife
+  # bs = np.hstack([bs, gammarv.rvs(ab, scale=1 / bb, size=n)])
+  # hs = np.hstack([hs, gammarv.rvs(ah, scale=1 / bh, size=n)])
+
   posteriors = np.vectorize(posterior2d, [float])(bs, hs)
   fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=1.0)
 
-  betterFit = _monteCarloImprove((fit['alphax'], fit['betax']), (fit['alphay'], fit['betay']),
-                                 posterior2d,
-                                 size=size,
-                                 debug=debug)
+  betterFit = _monteCarloImprove(
+      expandGamma(fit['alphax'], fit['betax'], 1.),
+      expandGamma(fit['alphay'], fit['betay'], 1.),
+      posterior2d,
+      size=size,
+      debug=debug)
 
   # update prior(s)
   ret.prob.boost = (betterFit['alphax'], betterFit['betax'])
@@ -404,6 +435,20 @@ def _logBinomPmfLogp(n: int, k: int, logp: float) -> float:
   return logcomb + k * logp
 
 
+def _noisyBinaryToLogPmfs(quiz: NoisyBinaryResult) -> tuple[float, float]:
+  z = quiz.result > 0.5
+  return _noisyHelper(z, quiz.q1, quiz.q0)
+
+
+@cache
+def _noisyHelper(z: bool, q1: float, q0: float) -> tuple[float, float]:
+  return (_logBernPmf(z, q1), _logBernPmf(z, q0))
+
+
+def _logBernPmf(z: Union[int, bool], p: float) -> float:
+  return np.log(p) if z else np.log(1 - p)
+
+
 def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=False):
   "log posterior up to a constant offset"
   ab, bb = ret.prob.boostPrior
@@ -419,12 +464,14 @@ def _posterior(b: float, h: float, ret: Model, left: float, right: float, extra=
     logPrecall = -res.hoursElapsed / currHalflife * LN2
     if isinstance(res, NoisyBinaryResult):
       # noisy binary/Bernoulli
+      q1LogPmf, q0LogPmf = _noisyBinaryToLogPmfs(res)
       logPfail = np.log(-np.expm1(logPrecall))
-      z = int(success(res))
       # Stan has this nice function, log_mix, which is perfect for this...
-      loglik.append(
-          logsumexp([logPrecall + bernrv.logpmf(z, res.q1), logPfail + bernrv.logpmf(z, res.q0)]))
-      if z:
+      loglik.append(np.log(np.exp(logPrecall + q1LogPmf) + np.exp(logPfail + q0LogPmf)))
+      # logsumexp is 3x slower??
+      # loglik.append(logsumexp([logPrecall + q1LogPmf, logPfail + q0LogPmf]))
+
+      if (res.result > 0.5):
         currHalflife *= clampLerp(left * currHalflife, right * currHalflife, 1, max(1, b),
                                   res.hoursElapsed)
     else:
@@ -516,10 +563,15 @@ def _weightedGammaEstimate(h, w):
   """
   wsum = fsum(w)
   whsum = fsum(w * h)
-  that2 = fsum(w * h * np.log(h)) / wsum - whsum / wsum * fsum(w * np.log(h)) / wsum
-  khat2 = whsum / wsum / that2
-  fit = (khat2, 1 / that2)
-  return fit
+  t = fsum(w * h * np.log(h)) / wsum - whsum / wsum * fsum(w * np.log(h)) / wsum
+  k = whsum / wsum / t
+  return (k, 1 / t)
+  # this is the bias-corrected form on Wikipedia
+  # n = len(h)
+  # t2 = n / (n - 1) * t
+  # k2 = k - (3 * k - 2 / 3 * (k / (1 + k) - 0.8 * k / (1 + k)**2)) / n
+  # fit2 = (k2, 1 / t2)
+  # return fit2
 
 
 def _weightedGammaEstimateMaxLik(x, w):

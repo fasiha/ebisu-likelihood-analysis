@@ -427,7 +427,7 @@ class TestEbisu(unittest.TestCase):
     # by scalar >=1.
     self.assertAlmostEqual(m(s.prob.initHl), s.pred.currentHalflifeHours)
 
-  def test_full(self, verbose=False):
+  def test_full(self, verbose=True):
     initHlMean = 10  # hours
     initHlBeta = 0.1
     initHlPrior = (initHlBeta * initHlMean, initHlBeta)
@@ -443,16 +443,16 @@ class TestEbisu(unittest.TestCase):
 
     left = 0.3
     # simulate a variety of 4-quiz trajectories:
-    for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [1, 0], [False]):
+    for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [0], [True]):
       upd = deepcopy(init)
       elapsedHours = fraction * initHlMean
       thisNow = now + elapsedHours * MILLISECONDS_PER_HOUR
       upd = ebisu.updateRecall(upd, result, now=thisNow)
 
       for nextResult, nextElapsed, nextTotal in zip(
-          [1, 1, 1],
+          [1, 1, 1 if not lastNoisy else (0.2)],
           [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
-          [1, 2, 2],
+          [1, 2, 2 if not lastNoisy else 1],
       ):
         thisNow += nextElapsed * MILLISECONDS_PER_HOUR
         upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=thisNow)
@@ -474,28 +474,39 @@ class TestEbisu(unittest.TestCase):
       # the other methods well for ~4. It also can only compute posterior moments.
       @cache
       def posterior2d(b, h):
+        if b == 0 or h == 0:
+          return 0
         return mp.exp(ebisu._posterior(float(b), float(h), upd, 0.3, 1.0))
 
       def integration(maxdegree: int, wantVar: bool = False):
-        method = 'gauss-legendre'
+        method = 'tanh-sinh'
+        errs = dict()
+        res = dict()
         f0 = lambda b, h: posterior2d(b, h)
-        den = mp.quad(f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+        res['den'], errs['den'] = mp.quad(
+            f0, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method, error=True)
         fb = lambda b, h: b * posterior2d(b, h)
-        numb = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+        res['numb'], errs['numb'] = mp.quad(
+            fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method, error=True)
         fh = lambda b, h: h * posterior2d(b, h)
-        numh = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+        res['numh'], errs['numh'] = mp.quad(
+            fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method, error=True)
 
         # second non-central moment
         if wantVar:
           fh = lambda b, h: h**2 * posterior2d(b, h)
-          numh2 = mp.quad(fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+          res['numh2'], errs['numh2'] = mp.quad(
+              fh, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method, error=True)
           fb = lambda b, h: b**2 * posterior2d(b, h)
-          numb2 = mp.quad(fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method)
+          res['numb2'], errs['numb2'] = mp.quad(
+              fb, [0, mp.inf], [0, mp.inf], maxdegree=maxdegree, method=method, error=True)
 
-        boostMeanInt, hl0MeanInt = numb / den, numh / den
+        if verbose:
+          print('quad int errors', {k: [res[k], v] for k, v in errs.items()})
+        boostMeanInt, hl0MeanInt = res['numb'] / res['den'], res['numh'] / res['den']
         if wantVar:
-          bSecondMoment = numb2 / den
-          hSecondMoment = numh2 / den
+          bSecondMoment = res['numb2'] / res['den']
+          hSecondMoment = res['numh2'] / res['den']
 
           boostVarInt, hl0VarInt = bSecondMoment - boostMeanInt**2, hSecondMoment - hl0MeanInt**2
           return [(boostMeanInt, boostVarInt, bSecondMoment, mp.sqrt(bSecondMoment)),
@@ -506,7 +517,10 @@ class TestEbisu(unittest.TestCase):
 
       AB_ERR = 0.03
       MEAN_ERR = 0.01
-      M2_ERR = 0.011
+      M2_ERR_BINOMIAL = 0.02
+      M2_ERR_NOISY = 0.05
+      M2_ERR = M2_ERR_NOISY if lastNoisy else M2_ERR_BINOMIAL
+      MIN_KISH_EFFICIENCY = 0.7  # between 0 and 1, higher is better
       M2_FIT_ERR = 0.05
       # TRUE_POST_VAR_ERR = 0.01
       # FIT_VAR_ERR = 0.05
@@ -515,7 +529,8 @@ class TestEbisu(unittest.TestCase):
       # Because this method can be inaccurate and slow, try it with a small number
       # of samples and increase it quickly if we don't meet tolerances.
       for size in [1_000_000, 20_000_000]:
-        print('!')
+        if verbose:
+          print('!')
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
             init.prob.boostPrior, [r.hoursElapsed for r in upd.quiz.results[-1]],
@@ -539,24 +554,26 @@ class TestEbisu(unittest.TestCase):
       # (a) full Ebisu update and (b) raw Monte Carlo. Also of course compare the
       # fit (α, β) for both random variables (initial halflife and boost) between
       # full Ebisu vs raw Monte Carlo.
+      if verbose:
+        print(
+            'ab',
+            relativeError([full.prob.boost, full.prob.initHl],
+                          [mc["posteriorBoost"], mc["posteriorInitHl"]]))
+        print('boost (ebisuSamp/mc)', relativeError(bEbisuSamplesStats, mc['statsBoost']))
+        print('inith (ebisuSamp/mc)', relativeError(hEbisuSamplesStats, mc['statsInitHl']))
+        print('boost ebisuSamp/int', relativeError(bEbisuSamplesStats, np.array(bInt, dtype=float)))
+        print('inithl ebisuSamp/int', relativeError(hEbisuSamplesStats, np.array(hInt,
+                                                                                 dtype=float)))
 
-      print(
-          'ab',
-          relativeError([full.prob.boost, full.prob.initHl],
-                        [mc["posteriorBoost"], mc["posteriorInitHl"]]))
-      print('boost (ebisuSamp/mc)', relativeError(bEbisuSamplesStats, mc['statsBoost']))
-      print('inith (ebisuSamp/mc)', relativeError(hEbisuSamplesStats, mc['statsInitHl']))
-      print('boost ebisuSamp/int', relativeError(bEbisuSamplesStats, np.array(bInt, dtype=float)))
-      print('inithl ebisuSamp/int', relativeError(hEbisuSamplesStats, np.array(hInt, dtype=float)))
-      print('Ebisu Gamma fit')
-      print('boost eSamp/eClosed', relativeError(bEbisuSamplesStats,
-                                                 gammaToStats(*full.prob.boost)))
-      print('inithl eSamp/eClosed',
-            relativeError(hEbisuSamplesStats, gammaToStats(*full.prob.initHl)))
-      print('boost eSamp/eMaxlik',
-            relativeError(bEbisuSamplesStats, gammaToStats(*fullDebug['maxLikFit'][0])))
-      print('inithl eSamp/eMaxlik',
-            relativeError(hEbisuSamplesStats, gammaToStats(*fullDebug['maxLikFit'][1])))
+        print('boost mc/int', relativeError(mc['statsBoost'], np.array(bInt, dtype=float)))
+        print('inithl mc/int', relativeError(mc['statsInitHl'], np.array(hInt, dtype=float)))
+        print('kish efficiency', fullDebug['kish'])
+
+        print('Ebisu Gamma fit')
+        print('boost eSamp/eClosed',
+              relativeError(bEbisuSamplesStats, gammaToStats(*full.prob.boost)))
+        print('inithl eSamp/eClosed',
+              relativeError(hEbisuSamplesStats, gammaToStats(*full.prob.initHl)))
 
       # Ebisu posterior weighted samples vs numerical integration (nothing to do with Monte Carlo)
       self.assertLessEqual(
@@ -601,6 +618,10 @@ class TestEbisu(unittest.TestCase):
           m2_err, M2_ERR,
           f'Ebisu Gamma fit 2nd moment = Monte Carlo posterior 2nd moment, {fraction=}, {result=}, {lastNoisy=}'
       )
+
+      # check Kish efficiency
+      self.assertGreater(fullDebug['kish'], MIN_KISH_EFFICIENCY,
+                         f'Ebisu samples Kish efficiency, {fraction=}, {result=}, {lastNoisy=}')
     return upd
 
 
