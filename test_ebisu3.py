@@ -165,6 +165,7 @@ def relativeError(actual: float, expected: float) -> float:
 
 seed = 29907812
 # seed = np.random.randint(1, 1_000_000_000)
+# seed = 708572856  # fails?
 print(f'{seed=}')
 
 
@@ -585,6 +586,8 @@ class TestEbisu(unittest.TestCase):
         print('inithl eSamp/eClosed',
               relativeError(hEbisuSamplesStats, gammaToStats(*full.prob.initHl)))
 
+        print(f'boostInt=dict(mean={bInt[0]}, m2={bInt[2]})')
+        print(f'inithInt=dict(mean={hInt[0]}, m2={hInt[2]})')
       # Ebisu posterior weighted samples vs numerical integration (nothing to do with Monte Carlo)
       self.assertLessEqual(
           max(
