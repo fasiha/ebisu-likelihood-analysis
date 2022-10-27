@@ -163,10 +163,14 @@ def relativeError(actual: float, expected: float) -> float:
   return np.abs(a - e) / np.abs(e)
 
 
+seed = 29907812
+# seed = np.random.randint(1, 1_000_000_000)
+print(f'{seed=}')
+
+
 class TestEbisu(unittest.TestCase):
 
   def setUp(self):
-    seed = 29907812  #np.random.randint(1, 100_000_000)
     np.random.seed(seed=seed)  # for sanity when testing with Monte Carlo
 
   def test_gamma_update_noisy(self):
@@ -412,11 +416,12 @@ class TestEbisu(unittest.TestCase):
     # require monotonically decreasing initHalflife, current halflife, and boost
     # since we have an initial success followed by a string of failures
     m = lambda tup: ebisu._gammaToMean(*tup)
+    # print('hls', [f.pred.currentHalflifeHours for f in fulls])
     for left, right in zip(fulls[1:], fulls[2:]):
       self.assertGreater(left.pred.currentHalflifeHours, right.pred.currentHalflifeHours)
       self.assertGreater(m(left.prob.initHl), m(right.prob.initHl))
       self.assertGreaterEqual(m(left.prob.initHl), m(right.prob.initHl))
-
+    # print('bs', [m(f.prob.boost) for f in fulls])
     self.assertLess(m(fulls[-1].prob.boost), 1.0, 'mean boost<1 reached')
 
     # add another failure
@@ -548,8 +553,8 @@ class TestEbisu(unittest.TestCase):
             relativeError(bEbisuSamplesStats[0], mc['statsBoost'][0]),
             relativeError(hEbisuSamplesStats[0], mc['statsInitHl'][0]))
         m2_err = max(
-            relativeError(bEbisuSamplesStats[0], mc['statsBoost'][0]),
-            relativeError(hEbisuSamplesStats[0], mc['statsInitHl'][0]))
+            relativeError(bEbisuSamplesStats[2], mc['statsBoost'][2]),
+            relativeError(hEbisuSamplesStats[2], mc['statsInitHl'][2]))
 
         if (ab_err < AB_ERR and mean_err < MEAN_ERR and m2_err < M2_ERR):
           break
