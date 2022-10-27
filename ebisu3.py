@@ -3,6 +3,7 @@ from scipy.optimize import minimize  #type:ignore
 from math import fsum
 import numpy as np  # type:ignore
 from scipy.stats import gamma as gammarv  # type: ignore
+from scipy.stats import uniform as uniformrv  # type: ignore
 from scipy.special import kv, kve, gammaln, gamma, betaln, logsumexp  #type: ignore
 from dataclasses import dataclass
 from time import time_ns
@@ -235,24 +236,64 @@ def updateRecallHistory(
   ah, bh = ret.prob.initHlPrior
   minBoost, maxBoost = gammarv.ppf([.01, 0.9999], ab, scale=1.0 / bb)
   minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
+  minBoost /= 3
+  minHalflife /= 3
+  maxBoost *= 2
+  maxHalflife *= 2.5
+  # print(f'b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}')
 
-  posterior2d = lambda b, h: _posterior(b, h, ret, left, right)
+  lpScalar = lambda b, h: _posterior(b, h, ret, left, right)
+  lpVector = np.vectorize(lpScalar, [float])
+
   n = 600
   bs, hs = np.random.rand(2, n)
   bs = bs * (maxBoost - minBoost) + minBoost
   hs = hs * (maxHalflife - minHalflife) + minHalflife
-  # bs = np.hstack([bs, gammarv.rvs(ab, scale=1 / bb, size=n)])
-  # hs = np.hstack([hs, gammarv.rvs(ah, scale=1 / bh, size=n)])
 
-  posteriors = np.vectorize(posterior2d, [float])(bs, hs)
-  fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=1.0)
+  # maxLik = minimize(
+  #     lambda x: -posterior2d(*x), [_gammaToMean(ab, bb), _gammaToMean(ah, bh)],
+  #     bounds=[[minBoost, maxBoost], [minHalflife, maxHalflife]])
+  # assert maxLik.success
+  # mlBoost, mlHl0 = maxLik.x
+  # ml = maxLik.x
 
-  betterFit = _monteCarloImprove(
-      expandGamma(fit['alphax'], fit['betax'], 1.),
-      expandGamma(fit['alphay'], fit['betay'], 1.),
-      posterior2d,
-      size=size,
-      debug=debug)
+  # bvec = np.linspace(minBoost, maxBoost, n)
+  # hvec = np.linspace(minHalflife, maxHalflife, n)
+  # print(f'b={bvec[0]} to {bvec[-1]}')
+  # print(f'h={hvec[0]} to {hvec[-1]}')
+  # logProbVaryB = lp(bvec, mlHl0)
+  # logProbVaryH = lp(mlBoost, hvec)
+  # bs = np.hstack([bvec, np.ones(n) * mlBoost])
+  # hs = np.hstack([np.ones(n) * mlHl0, hvec])
+
+  # bs, hs = np.meshgrid(
+  #     np.linspace(minBoost, maxBoost, int(np.round(np.sqrt(n)))),
+  #     np.linspace(minHalflife, maxHalflife, int(np.round(np.sqrt(n)))))
+  # bs = bs.ravel()
+  # hs = hs.ravel()
+
+  posteriors = lpVector(bs, hs)
+  USEFIT = False
+  UNIF_FIT = True
+  fit = None if not USEFIT else _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
+  # print('x', (fit['alphax'], fit['betax']), 'y', (fit['alphay'], fit['betay']))
+  # print(_fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0))
+  if not UNIF_FIT:
+    betterFit = _monteCarloImprove(
+        (ab, bb) if not USEFIT else expandGamma(fit['alphax'], fit['betax'], 1.0),
+        (ah, bh) if not USEFIT else expandGamma(fit['alphay'], fit['betay'], 1.0),
+        lpScalar,
+        size=size,
+        debug=debug,
+    )
+  else:
+    betterFit = _monteCarloImproveUnif(
+        (minBoost, maxBoost),
+        (minHalflife, maxHalflife),
+        lpScalar,
+        size=size,
+        debug=debug,
+    )
 
   # update prior(s)
   ret.prob.boost = (betterFit['alphax'], betterFit['betax'])
@@ -263,11 +304,16 @@ def updateRecallHistory(
   ret.pred.currentHalflifeHours = extra['currentHalflife']
   if debug:
     return ret, dict(
+        origfit=fit,
         kish=betterFit['kish'],
         stds=betterFit['stds'],
         stats=betterFit['stats'],
         closedFit=betterFit['closedFit'],
         maxLikFit=betterFit['maxLikFit'],
+        betterFit=betterFit,
+        bs=bs,
+        hs=hs,
+        posteriors=posteriors,
     )
   return ret
 
@@ -517,6 +563,36 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
       meanY=_gammaToMean(alphay, betay))
 
 
+def _monteCarloImproveUnif(xminmax: tuple[float, float],
+                           yminmax: tuple[float, float],
+                           logposterior: Callable[[float, float], float],
+                           size=10_000,
+                           debug=False):
+  x = uniformrv.rvs(size=size, loc=xminmax[0], scale=xminmax[1] - xminmax[0])
+  y = uniformrv.rvs(size=size, loc=yminmax[0], scale=yminmax[1] - yminmax[0])
+  f = np.vectorize(logposterior, otypes=[float])
+  logp = f(x, y)
+  logw = logp - (-np.log((xminmax[1] - xminmax[0])) + -np.log(yminmax[1] - yminmax[0]))
+  w = np.exp(logw)
+  alphax, betax = _weightedGammaEstimate(x, w)
+  alphay, betay = _weightedGammaEstimate(y, w)
+  return dict(
+      x=[alphax, betax],
+      y=[alphay, betay],
+      alphax=alphax,
+      betax=betax,
+      alphay=alphay,
+      betay=betay,
+      kish=_kishLog(logw) if debug else -1,
+      stds=[np.std(w * v) for v in [x, y]] if debug else [],
+      stats=[_weightedMeanVarLogw(logw, samples) for samples in [x, y]] if debug else [],
+      closedFit=[(alphax, betax), (alphay, betay)] if debug else [],
+      maxLikFit=[_weightedGammaEstimateMaxLik(z, w) for z in [x, y]] if debug else [],
+      logw=logw,
+      xs=x,
+      ys=y)
+
+
 def _monteCarloImprove(xprior: tuple[float, float],
                        yprior: tuple[float, float],
                        logposterior: Callable[[float, float], float],
@@ -544,7 +620,9 @@ def _monteCarloImprove(xprior: tuple[float, float],
       stats=[_weightedMeanVarLogw(logw, samples) for samples in [x, y]] if debug else [],
       closedFit=[(alphax, betax), (alphay, betay)] if debug else [],
       maxLikFit=[_weightedGammaEstimateMaxLik(z, w) for z in [x, y]] if debug else [],
-  )
+      logw=logw,
+      xs=x,
+      ys=y)
 
 
 def _weightedMeanVarLogw(logw: np.ndarray, x: np.ndarray) -> tuple[float, float, float, float]:
@@ -614,3 +692,7 @@ def _predictRecallBayesian(model: Model, now: Union[float, None] = None, logDoma
       a, b, elapsedHours * LN2,
       logDomain=True) + a * np.log(b) - gammaln(a) + model.pred.logStrength
   return logPrecall if logDomain else np.exp(logPrecall)
+
+
+def gammaToMode(a, b):
+  return (a - b) / b if a >= 1 else 0
