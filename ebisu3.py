@@ -236,11 +236,7 @@ def updateRecallHistory(
   ah, bh = ret.prob.initHlPrior
   minBoost, maxBoost = gammarv.ppf([.01, 0.9999], ab, scale=1.0 / bb)
   minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
-  minBoost /= 3
-  minHalflife /= 3
-  maxBoost *= 2
-  maxHalflife *= 2.5
-  # print(f'b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}')
+  # print(f'for fit: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}')
 
   lpScalar = lambda b, h: _posterior(b, h, ret, left, right)
   lpVector = np.vectorize(lpScalar, [float])
@@ -250,51 +246,67 @@ def updateRecallHistory(
   bs = bs * (maxBoost - minBoost) + minBoost
   hs = hs * (maxHalflife - minHalflife) + minHalflife
 
-  # maxLik = minimize(
-  #     lambda x: -posterior2d(*x), [_gammaToMean(ab, bb), _gammaToMean(ah, bh)],
-  #     bounds=[[minBoost, maxBoost], [minHalflife, maxHalflife]])
-  # assert maxLik.success
-  # mlBoost, mlHl0 = maxLik.x
-  # ml = maxLik.x
-
-  # bvec = np.linspace(minBoost, maxBoost, n)
-  # hvec = np.linspace(minHalflife, maxHalflife, n)
-  # print(f'b={bvec[0]} to {bvec[-1]}')
-  # print(f'h={hvec[0]} to {hvec[-1]}')
-  # logProbVaryB = lp(bvec, mlHl0)
-  # logProbVaryH = lp(mlBoost, hvec)
-  # bs = np.hstack([bvec, np.ones(n) * mlBoost])
-  # hs = np.hstack([np.ones(n) * mlHl0, hvec])
-
-  # bs, hs = np.meshgrid(
-  #     np.linspace(minBoost, maxBoost, int(np.round(np.sqrt(n)))),
-  #     np.linspace(minHalflife, maxHalflife, int(np.round(np.sqrt(n)))))
-  # bs = bs.ravel()
-  # hs = hs.ravel()
-
   posteriors = lpVector(bs, hs)
-  USEFIT = False
-  UNIF_FIT = True
-  fit = None if not USEFIT else _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
-  # print('x', (fit['alphax'], fit['betax']), 'y', (fit['alphay'], fit['betay']))
-  # print(_fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0))
-  if not UNIF_FIT:
+
+  minBoost /= 3
+  minHalflife /= 3
+  maxBoost *= 2
+  maxHalflife *= 2.5
+  MIXTURE = False
+  # print(f'for sharp: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}, {MIXTURE=}')
+
+  if not MIXTURE:
+    fit = None
     betterFit = _monteCarloImprove(
-        (ab, bb) if not USEFIT else expandGamma(fit['alphax'], fit['betax'], 1.0),
-        (ah, bh) if not USEFIT else expandGamma(fit['alphay'], fit['betay'], 1.0),
-        lpScalar,
+        generateX=lambda size: uniformrv.rvs(size=size, loc=minBoost, scale=maxBoost - minBoost),
+        generateY=lambda size: uniformrv.rvs(
+            size=size, loc=minHalflife, scale=maxHalflife - minHalflife),
+        logpdfX=lambda x: uniformrv.logpdf(x, loc=minBoost, scale=maxBoost - minBoost),
+        logpdfY=lambda y: uniformrv.logpdf(y, loc=minHalflife, scale=maxHalflife - minHalflife),
+        logposterior=lpScalar,
         size=size,
         debug=debug,
     )
   else:
-    betterFit = _monteCarloImproveUnif(
-        (minBoost, maxBoost),
-        (minHalflife, maxHalflife),
-        lpScalar,
+    fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=1.0)
+
+    def mix(aWeight, genA, genB, logpdfA, logpdfB):
+
+      def gen(size: int):
+        numA = np.sum(np.random.rand(size) < aWeight)
+        a = genA(size=numA)
+        b = genB(size=size - numA)
+        return np.hstack([a, b])
+
+      def logpdf(x):
+        lpA = logpdfA(x)
+        lpB = logpdfB(x)
+        return logsumexp(np.vstack([lpA, lpB]), axis=0, b=np.array([[aWeight, 1 - aWeight]]).T)
+
+      return dict(gen=gen, logpdf=logpdf)
+
+    unifWeight = 1
+    xmix = mix(unifWeight,
+               lambda size: uniformrv.rvs(size=size, loc=minBoost, scale=maxBoost - minBoost),
+               lambda size: gammarv.rvs(fit['alphax'], scale=1 / fit['betax'], size=size),
+               lambda x: uniformrv.logpdf(x, loc=minBoost, scale=maxBoost - minBoost),
+               lambda x: gammarv.rvs(x, fit['alphax'], scale=1 / fit['betax']))
+    ymix = mix(
+        unifWeight,
+        lambda size: uniformrv.rvs(size=size, loc=minHalflife, scale=maxHalflife - minHalflife),
+        lambda size: gammarv.rvs(fit['alphay'], scale=1 / fit['betay'], size=size),
+        lambda x: uniformrv.logpdf(x, loc=minHalflife, scale=maxHalflife - minHalflife),
+        lambda x: gammarv.rvs(x, fit['alphay'], scale=1 / fit['betay']))
+
+    betterFit = _monteCarloImprove(
+        generateX=xmix['gen'],
+        generateY=ymix['gen'],
+        logpdfX=xmix['logpdf'],
+        logpdfY=ymix['logpdf'],
+        logposterior=lpScalar,
         size=size,
         debug=debug,
     )
-
   # update prior(s)
   ret.prob.boost = (betterFit['alphax'], betterFit['betax'])
   ret.prob.initHl = (betterFit['alphay'], betterFit['betay'])
@@ -563,48 +575,18 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
       meanY=_gammaToMean(alphay, betay))
 
 
-def _monteCarloImproveUnif(xminmax: tuple[float, float],
-                           yminmax: tuple[float, float],
-                           logposterior: Callable[[float, float], float],
-                           size=10_000,
-                           debug=False):
-  x = uniformrv.rvs(size=size, loc=xminmax[0], scale=xminmax[1] - xminmax[0])
-  y = uniformrv.rvs(size=size, loc=yminmax[0], scale=yminmax[1] - yminmax[0])
-  f = np.vectorize(logposterior, otypes=[float])
-  logp = f(x, y)
-  logw = logp - (-np.log((xminmax[1] - xminmax[0])) + -np.log(yminmax[1] - yminmax[0]))
-  w = np.exp(logw)
-  alphax, betax = _weightedGammaEstimate(x, w)
-  alphay, betay = _weightedGammaEstimate(y, w)
-  return dict(
-      x=[alphax, betax],
-      y=[alphay, betay],
-      alphax=alphax,
-      betax=betax,
-      alphay=alphay,
-      betay=betay,
-      kish=_kishLog(logw) if debug else -1,
-      stds=[np.std(w * v) for v in [x, y]] if debug else [],
-      stats=[_weightedMeanVarLogw(logw, samples) for samples in [x, y]] if debug else [],
-      closedFit=[(alphax, betax), (alphay, betay)] if debug else [],
-      maxLikFit=[_weightedGammaEstimateMaxLik(z, w) for z in [x, y]] if debug else [],
-      logw=logw,
-      xs=x,
-      ys=y)
-
-
-def _monteCarloImprove(xprior: tuple[float, float],
-                       yprior: tuple[float, float],
+def _monteCarloImprove(generateX: Callable[[int], np.ndarray],
+                       generateY: Callable[[int], np.ndarray],
+                       logpdfX: Callable[[np.ndarray], np.ndarray],
+                       logpdfY: Callable[[np.ndarray], np.ndarray],
                        logposterior: Callable[[float, float], float],
                        size=10_000,
                        debug=False):
-  x = gammarv.rvs(xprior[0], scale=1 / xprior[1], size=size)
-  y = gammarv.rvs(yprior[0], scale=1 / yprior[1], size=size)
+  x = generateX(size)
+  y = generateY(size)
   f = np.vectorize(logposterior, otypes=[float])
   logp = f(x, y)
-  logw = logp - (
-      gammarv.logpdf(x, xprior[0], scale=1 / xprior[1]) +
-      gammarv.logpdf(y, yprior[0], scale=1 / yprior[1]))
+  logw = logp - (logpdfX(x) + logpdfY(y))
   w = np.exp(logw)
   alphax, betax = _weightedGammaEstimate(x, w)
   alphay, betay = _weightedGammaEstimate(y, w)
