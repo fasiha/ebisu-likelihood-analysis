@@ -15,6 +15,8 @@ import numpy as np
 from typing import Optional, Union
 import math
 from copy import deepcopy
+import pickle
+from datetime import datetime
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 weightedGammaEstimate = ebisu._weightedGammaEstimate
@@ -163,8 +165,10 @@ def relativeError(actual: float, expected: float) -> float:
   return np.abs(a - e) / np.abs(e)
 
 
+integralResults = dict()
+
 seed = 29907812
-seed = np.random.randint(1, 1_000_000_000)
+# seed = np.random.randint(1, 1_000_000_000)
 # seed = 708572856  # fails?
 print(f'{seed=}')
 
@@ -588,6 +592,10 @@ class TestEbisu(unittest.TestCase):
 
         print(f'boostInt=dict(mean={bInt[0]}, m2={bInt[2]})')
         print(f'inithInt=dict(mean={hInt[0]}, m2={hInt[2]})')
+        integralResults[(fraction, result, lastNoisy)] = dict(
+            inith=dict(mean=hInt[0], m2=hInt[2]),
+            boost=dict(mean=bInt[0], m2=bInt[2]),
+        )
       # Ebisu posterior weighted samples vs numerical integration (nothing to do with Monte Carlo)
       self.assertLessEqual(
           max(
@@ -635,6 +643,10 @@ class TestEbisu(unittest.TestCase):
       # check Kish efficiency
       self.assertGreater(fullDebug['kish'], MIN_KISH_EFFICIENCY,
                          f'Ebisu samples Kish efficiency, {fraction=}, {result=}, {lastNoisy=}')
+    with open('finalres.pickle', 'wb') as fid:
+      integralResults['metadata'] = dict(date=datetime.utcnow().isoformat())
+      print(integralResults)
+      pickle.dump(integralResults, fid)
     return upd
 
 
