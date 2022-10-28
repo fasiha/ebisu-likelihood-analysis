@@ -252,23 +252,20 @@ def updateRecallHistory(
   lpVector = np.vectorize(lpScalar, [float])
 
   n = 600
-  bs, hs = np.random.rand(2, n)
-  bs = bs * (maxBoost - minBoost) + minBoost
-  hs = hs * (maxHalflife - minHalflife) + minHalflife
-  posteriors = lpVector(bs, hs)
 
   MIXTURE = True
-  # MIXTURE = False
+  MIXTURE = False
   print(f'{MIXTURE=}')
   # print(f'for sharp: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}, {MIXTURE=}')
 
-  if not MIXTURE:
-    fit = None
-    minBoost /= 3
-    minHalflife /= 3
-    maxBoost *= 2
-    maxHalflife *= 2.5
+  maxBoost, maxHalflife = expand(10, minBoost / 3, minHalflife / 3, maxBoost * 3, maxHalflife * 3,
+                                 n, lpVector)
+  minBoost = 0
+  minHalflife = 0
+  print(f'after expand: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}')
 
+  if not MIXTURE:
+    fit, bs, hs, posteriors = None, None, None, None
     betterFit = _monteCarloImprove(
         generateX=lambda size: uniformrv.rvs(size=size, loc=minBoost, scale=maxBoost - minBoost),
         generateY=lambda size: uniformrv.rvs(
@@ -280,13 +277,11 @@ def updateRecallHistory(
         debug=debug,
     )
   else:
-    maxBoost, maxHalflife = expand(10, minBoost / 3, minHalflife / 3, maxBoost * 3, maxHalflife * 3,
-                                   n, lpVector)
-    minBoost = 0
-    minHalflife = 0
-    print(f'after expand: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}')
-
     try:
+      bs, hs = np.random.rand(2, n)
+      bs = bs * (maxBoost - minBoost) + minBoost
+      hs = hs * (maxHalflife - minHalflife) + minHalflife
+      posteriors = lpVector(bs, hs)
       fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
     except AssertionError as e:
       if "positive gamma parameters" in e.args[0]:
