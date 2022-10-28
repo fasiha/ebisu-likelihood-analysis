@@ -13,6 +13,12 @@ import numpy as np
 from copy import deepcopy
 from scipy.stats import gamma as gammarv  # type: ignore
 
+
+def re(actual: float, expected: float) -> float:
+  e, a = np.array(expected), np.array(actual)
+  return np.abs(a - e) / np.abs(e)
+
+
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 weightedGammaEstimate = ebisu._weightedGammaEstimate
 weightedMeanVarLogw = ebisu._weightedMeanVarLogw
@@ -54,8 +60,9 @@ for fraction, result, lastNoisy in product([.1], [0], [False]):
   # less accurate model but remain confident that the *means* of this posterior
   # are accurate.
 
-  seed = 29907812  #np.random.randint(1, 100_000_000)
-  seed = 708572856  # fails?
+  seed = np.random.randint(1, 1_000_000_000)
+  # seed = 29907812  #np.random.randint(1, 100_000_000)
+  # seed = 708572856  # fails?
   print(f'{seed=}')
   np.random.seed(seed=seed)  # for sanity when testing with Monte Carlo
 
@@ -67,6 +74,19 @@ for fraction, result, lastNoisy in product([.1], [0], [False]):
   # assert fullDebug['kish'] > 0.7
 
 # sys.exit()
+
+boostInt = dict(mean=1.56148031637861, m2=2.94182921460451)
+inithInt = dict(mean=6.48573020826124, m2=63.1383473633432)
+bstats, hstats = fullDebug["betterFit"]["stats"]
+boost = dict(mean=bstats[0], m2=bstats[2])
+inith = dict(mean=hstats[0], m2=hstats[2])
+
+print(
+    f"b errs: mean={re(boost['mean'], boostInt['mean']):0.4g}, m2={re(boost['m2'], boostInt['m2']):0.4g}"
+)
+print(
+    f"h errs: mean={re(inith['mean'], inithInt['mean']):0.4g}, m2={re(inith['m2'], inithInt['m2']):0.4g}"
+)
 
 logw = fullDebug['betterFit']['logw']
 ns = list(range(0, logw.size + 1, round(logw.size / 250)))[1:]
@@ -93,8 +113,8 @@ def _weightedGammaEstimateFAST(h, w):
   return (k, 1 / t)
 
 
-cumXfit = [(_weightedGammaEstimateFAST(xs[:n], w[:n])) for n in ns]
-cumYfit = [(_weightedGammaEstimateFAST(ys[:n], w[:n])) for n in ns]
+# cumXfit = [(_weightedGammaEstimateFAST(xs[:n], w[:n])) for n in ns]
+# cumYfit = [(_weightedGammaEstimateFAST(ys[:n], w[:n])) for n in ns]
 
 # fig2, ax2 = plt.subplots(4)
 # ax2[0].plot(ns, [ebisu._gammaToMean(*res) for res in cumXfit])
@@ -149,12 +169,14 @@ def viz(m: ebisu.Model):
         gammarv.logpdf(bs, full.prob.boostPrior[0], scale=1 / full.prob.boostPrior[1]) +
         gammarv.logpdf(hs, full.prob.initHlPrior[0], scale=1 / full.prob.initHlPrior[1]))
 
-  fig, axs = plt.subplots(3)
+  fig, axs = plt.subplots(3, tight_layout=True)
 
   obj = im(bv, hv, post, axs[0])
+  axs[0].set_title('log post')
   set_clim(10, obj)
 
   obj2 = im(bv, hv, logprior, axs[1])
+  axs[1].set_title('log post gamma fit' if fullDebug['origfit'] else 'prior')
   set_clim(10, obj2)
 
   obj3 = im(bv, hv, post - logprior, axs[2])
@@ -170,26 +192,6 @@ v["axs"][0].plot(
 
 # plt.figure()
 # plt.scatter(fullDebug["bs"], fullDebug["hs"], s=1, c=fullDebug['posteriors'])
-
-bstats, hstats = fullDebug["betterFit"]["stats"]
-boost = dict(mean=bstats[0], m2=bstats[2])
-inith = dict(mean=hstats[0], m2=hstats[2])
-
-boostInt = dict(mean=1.56148031637861, m2=2.94182921460451)
-inithInt = dict(mean=6.48573020826124, m2=63.1383473633432)
-
-
-def re(actual: float, expected: float) -> float:
-  e, a = np.array(expected), np.array(actual)
-  return np.abs(a - e) / np.abs(e)
-
-
-print(
-    f"b errs: mean={re(boost['mean'], boostInt['mean']):0.4g}, m2={re(boost['m2'], boostInt['m2']):0.4g}"
-)
-print(
-    f"h errs: mean={re(inith['mean'], inithInt['mean']):0.4g}, m2={re(inith['m2'], inithInt['m2']):0.4g}"
-)
 
 f6, a6 = plt.subplots(2)
 a6[0].plot(ns, [np.sum(xs[:n] * w[:n]) / np.sum(w[:n]) for n in ns])

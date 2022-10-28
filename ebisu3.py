@@ -221,6 +221,16 @@ def expandGamma(a: float, b: float, factor: float) -> tuple[float, float]:
   return _meanVarToGamma(m, v * factor)
 
 
+def expand(thresh: float, minBoost: float, minHalflife: float, maxBoost: float, maxHalflife: float,
+           n: int, lpVector):
+  bvec = np.linspace(minBoost, maxBoost, int(np.sqrt(n)))
+  hvec = np.linspace(minHalflife, maxHalflife, int(np.sqrt(n)))
+  bs, hs = np.meshgrid(bvec, hvec)
+  posteriors = lpVector(bs, hs)
+  nz0, nz1 = np.nonzero(np.diff(np.sign(posteriors - np.max(posteriors) + abs(thresh)), axis=1))
+  return bvec[np.max(nz1)] * 1.2, hvec[np.max(nz0)] * 1.2
+
+
 def updateRecallHistory(
     model: Model,
     left=0.3,
@@ -248,15 +258,18 @@ def updateRecallHistory(
 
   posteriors = lpVector(bs, hs)
 
-  minBoost /= 3
-  minHalflife /= 3
-  maxBoost *= 2
-  maxHalflife *= 2.5
-  MIXTURE = False
+  MIXTURE = True
+  # MIXTURE = False
+  print(f'{MIXTURE=}')
   # print(f'for sharp: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}, {MIXTURE=}')
 
   if not MIXTURE:
     fit = None
+    minBoost /= 3
+    minHalflife /= 3
+    maxBoost *= 2
+    maxHalflife *= 2.5
+
     betterFit = _monteCarloImprove(
         generateX=lambda size: uniformrv.rvs(size=size, loc=minBoost, scale=maxBoost - minBoost),
         generateY=lambda size: uniformrv.rvs(
@@ -268,7 +281,13 @@ def updateRecallHistory(
         debug=debug,
     )
   else:
-    fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=1.0)
+    maxBoost, maxHalflife = expand(10, minBoost / 3, minHalflife / 3, maxBoost * 3, maxHalflife * 3,
+                                   n, lpVector)
+    minBoost = 0
+    minHalflife = 0
+    print(f'after expand: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}')
+
+    fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
 
     def mix(aWeight, genA, genB, logpdfA, logpdfB):
 
@@ -285,7 +304,7 @@ def updateRecallHistory(
 
       return dict(gen=gen, logpdf=logpdf)
 
-    unifWeight = 1
+    unifWeight = 1.0
     xmix = mix(unifWeight,
                lambda size: uniformrv.rvs(size=size, loc=minBoost, scale=maxBoost - minBoost),
                lambda size: gammarv.rvs(fit['alphax'], scale=1 / fit['betax'], size=size),
