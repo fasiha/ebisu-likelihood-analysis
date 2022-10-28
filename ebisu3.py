@@ -255,7 +255,6 @@ def updateRecallHistory(
   bs, hs = np.random.rand(2, n)
   bs = bs * (maxBoost - minBoost) + minBoost
   hs = hs * (maxHalflife - minHalflife) + minHalflife
-
   posteriors = lpVector(bs, hs)
 
   MIXTURE = True
@@ -287,7 +286,19 @@ def updateRecallHistory(
     minHalflife = 0
     print(f'after expand: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}')
 
-    fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
+    try:
+      fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
+    except AssertionError as e:
+      if "positive gamma parameters" in e.args[0]:
+        print('something bad happened but trying again:', e)
+        n *= 2
+        bs, hs = np.random.rand(2, n)
+        bs = bs * (maxBoost - minBoost) + minBoost
+        hs = hs * (maxHalflife - minHalflife) + minHalflife
+        posteriors = lpVector(bs, hs)
+        fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
+      else:
+        raise e
 
     def mix(aWeight, genA, genB, logpdfA, logpdfB):
 

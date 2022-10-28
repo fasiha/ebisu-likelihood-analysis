@@ -37,8 +37,8 @@ init = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior, now=now)
 left = 0.3
 # simulate a variety of 4-quiz trajectories:
 # for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [0, 1], [False, True]):
-# for fraction, result, lastNoisy in product([9.5], [0], [False]):
-for fraction, result, lastNoisy in product([.1], [0], [False]):
+# for fraction, result, lastNoisy in product([.1], [0], [False]):
+for fraction, result, lastNoisy in product([9.5], [0], [False]):
   upd = deepcopy(init)
   elapsedHours = fraction * initHlMean
   thisNow = now + elapsedHours * MILLISECONDS_PER_HOUR
@@ -61,6 +61,7 @@ for fraction, result, lastNoisy in product([.1], [0], [False]):
   # are accurate.
 
   seed = np.random.randint(1, 1_000_000_000)
+  # seed = 498076874 # causes mixture to fail initial fit…?
   # seed = 29907812  #np.random.randint(1, 100_000_000)
   # seed = 708572856  # fails?
   print(f'{seed=}')
@@ -73,20 +74,27 @@ for fraction, result, lastNoisy in product([.1], [0], [False]):
   print('kish', fullDebug['kish'])
   # assert fullDebug['kish'] > 0.7
 
-# sys.exit()
-
-boostInt = dict(mean=1.56148031637861, m2=2.94182921460451)
-inithInt = dict(mean=6.48573020826124, m2=63.1383473633432)
 bstats, hstats = fullDebug["betterFit"]["stats"]
 boost = dict(mean=bstats[0], m2=bstats[2])
 inith = dict(mean=hstats[0], m2=hstats[2])
 
-print(
-    f"b errs: mean={re(boost['mean'], boostInt['mean']):0.4g}, m2={re(boost['m2'], boostInt['m2']):0.4g}"
-)
-print(
-    f"h errs: mean={re(inith['mean'], inithInt['mean']):0.4g}, m2={re(inith['m2'], inithInt['m2']):0.4g}"
-)
+integralResults = {
+    (.1, 0, False):
+        dict(
+            boost=dict(mean=1.56148031637861, m2=2.94182921460451),
+            inith=dict(mean=6.48573020826124, m2=63.1383473633432))
+}
+
+intRes = integralResults.get((fraction, result, lastNoisy), None)
+if intRes:
+  boostInt = intRes['boost']
+  inithInt = intRes['inith']
+  print(
+      f"b errs: mean={re(boost['mean'], boostInt['mean']):0.4g}, m2={re(boost['m2'], boostInt['m2']):0.4g}"
+  )
+  print(
+      f"h errs: mean={re(inith['mean'], inithInt['mean']):0.4g}, m2={re(inith['m2'], inithInt['m2']):0.4g}"
+  )
 
 logw = fullDebug['betterFit']['logw']
 ns = list(range(0, logw.size + 1, round(logw.size / 250)))[1:]
@@ -197,5 +205,6 @@ f6, a6 = plt.subplots(2)
 a6[0].plot(ns, [np.sum(xs[:n] * w[:n]) / np.sum(w[:n]) for n in ns])
 a6[1].plot(ns, [np.sum(ys[:n] * w[:n]) / np.sum(w[:n]) for n in ns])
 
-a6[0].hlines(boostInt['mean'], ns[0], ns[-1], colors=['r'], linestyles='dotted')
-a6[1].hlines(inithInt['mean'], ns[0], ns[-1], colors=['r'], linestyles='dotted')
+if intRes:
+  a6[0].hlines(boostInt['mean'], ns[0], ns[-1], colors=['r'], linestyles='dotted')
+  a6[1].hlines(inithInt['mean'], ns[0], ns[-1], colors=['r'], linestyles='dotted')
