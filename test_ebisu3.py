@@ -288,7 +288,6 @@ class TestEbisu(unittest.TestCase):
     # I set the seed to avoid test surprises.
     MAX_RELERR_AB = .05
     MAX_RELERR_MEAN = .01
-    np.random.seed(seed=233423 + 1)
     for trial in range(1):
       for fraction in [0.1, 1., 10.]:
         t = initHlMean * fraction
