@@ -315,13 +315,13 @@ def updateRecallHistory(
                lambda size: uniformrv.rvs(size=size, loc=minBoost, scale=maxBoost - minBoost),
                lambda size: gammarv.rvs(fit['alphax'], scale=1 / fit['betax'], size=size),
                lambda x: uniformrv.logpdf(x, loc=minBoost, scale=maxBoost - minBoost),
-               lambda x: gammarv.rvs(x, fit['alphax'], scale=1 / fit['betax']))
+               lambda x: gammarv.logpdf(x, fit['alphax'], scale=1 / fit['betax']))
     ymix = mix(
         unifWeight,
         lambda size: uniformrv.rvs(size=size, loc=minHalflife, scale=maxHalflife - minHalflife),
         lambda size: gammarv.rvs(fit['alphay'], scale=1 / fit['betay'], size=size),
         lambda x: uniformrv.logpdf(x, loc=minHalflife, scale=maxHalflife - minHalflife),
-        lambda x: gammarv.rvs(x, fit['alphay'], scale=1 / fit['betay']))
+        lambda x: gammarv.logpdf(x, fit['alphay'], scale=1 / fit['betay']))
 
     betterFit = _monteCarloImprove(
         generateX=xmix['gen'],
