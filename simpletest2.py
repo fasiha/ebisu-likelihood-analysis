@@ -14,6 +14,40 @@ from copy import deepcopy
 from scipy.stats import gamma as gammarv  # type: ignore
 
 
+def relativeError(actual: float, expected: float) -> float:
+  e, a = np.array(expected), np.array(actual)
+  return np.abs(a - e) / np.abs(e)
+
+
+def gammaToMean(a, b):
+  return a / b
+
+
+def gammaToStd(a, b):
+  return np.sqrt(a) / b
+
+
+def gammaToVar(a, b):
+  return a / (b)**2
+
+
+def gammaToMeanStd(a, b):
+  return (gammaToMean(a, b), gammaToStd(a, b))
+
+
+def gammaToMeanVar(a, b):
+  return (gammaToMean(a, b), gammaToVar(a, b))
+
+
+def gammaToStats(a: float, b: float):
+  mean = gammaToMean(a, b)
+  var = gammaToVar(a, b)
+  k = a
+  t = 1 / b
+  m2 = t**2 * k * (k + 1)  # second non-central moment
+  return (mean, var, m2, np.sqrt(m2))
+
+
 def re(actual: float, expected: float) -> float:
   e, a = np.array(expected), np.array(actual)
   return np.abs(a - e) / np.abs(e)
@@ -38,7 +72,7 @@ left = 0.3
 # simulate a variety of 4-quiz trajectories:
 # for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [0, 1], [False, True]):
 # for fraction, result, lastNoisy in product([.1], [0], [False]):
-for fraction, result, lastNoisy in product([9.5], [0], [False]):
+for fraction, result, lastNoisy in product([.1], [0], [False]):
   upd = deepcopy(init)
   elapsedHours = fraction * initHlMean
   thisNow = now + elapsedHours * MILLISECONDS_PER_HOUR
@@ -64,6 +98,7 @@ for fraction, result, lastNoisy in product([9.5], [0], [False]):
   # seed = 498076874 # causes mixture to fail initial fit…?
   # seed = 29907812  #np.random.randint(1, 100_000_000)
   # seed = 708572856  # fails?
+  seed = 333
   print(f'{seed=}')
   np.random.seed(seed=seed)  # for sanity when testing with Monte Carlo
 
@@ -77,6 +112,9 @@ for fraction, result, lastNoisy in product([9.5], [0], [False]):
 bstats, hstats = fullDebug["betterFit"]["stats"]
 boost = dict(mean=bstats[0], m2=bstats[2])
 inith = dict(mean=hstats[0], m2=hstats[2])
+bEbisu = gammaToStats(*full.prob.boost)
+hEbisu = gammaToStats(*full.prob.initHl)
+relativeError(hstats, hEbisu)
 
 integralResults = {
     (.1, 0, False):

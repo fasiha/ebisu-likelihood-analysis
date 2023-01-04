@@ -167,8 +167,8 @@ def relativeError(actual: float, expected: float) -> float:
 
 integralResults = dict()
 
-seed = 29907812
-# seed = np.random.randint(1, 1_000_000_000)
+# seed = 29907812
+seed = np.random.randint(1, 1_000_000_000)
 # seed = 708572856  # fails?
 print(f'{seed=}')
 

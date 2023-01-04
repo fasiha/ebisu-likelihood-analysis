@@ -249,20 +249,21 @@ def updateRecallHistory(
   # print(f'for fit: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}')
 
   lpScalar = lambda b, h: _posterior(b, h, ret, left, right)
-  lpVector = np.vectorize(lpScalar, [float])
+  lpVector = np.vectorize(lpScalar, otypes=[float])
 
-  n = 600
+  n = 2600
 
   MIXTURE = True
-  MIXTURE = False
-  print(f'{MIXTURE=}')
+  # MIXTURE = False
+  unifWeight = 0.5
+
+  print(f'{MIXTURE=}, {unifWeight=}')
   # print(f'for sharp: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}, {MIXTURE=}')
 
   maxBoost, maxHalflife = expand(10, minBoost / 3, minHalflife / 3, maxBoost * 3, maxHalflife * 3,
                                  n, lpVector)
   minBoost = 0
   minHalflife = 0
-  print(f'after expand: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}')
 
   if not MIXTURE:
     fit, bs, hs, posteriors = None, None, None, None
@@ -282,7 +283,9 @@ def updateRecallHistory(
       bs = bs * (maxBoost - minBoost) + minBoost
       hs = hs * (maxHalflife - minHalflife) + minHalflife
       posteriors = lpVector(bs, hs)
-      fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
+      weightPower = 2.0
+      fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=weightPower)
+      print(f'{weightPower=}')
     except AssertionError as e:
       if "positive gamma parameters" in e.args[0]:
         print('something bad happened but trying again:', e)
@@ -291,7 +294,7 @@ def updateRecallHistory(
         bs = bs * (maxBoost - minBoost) + minBoost
         hs = hs * (maxHalflife - minHalflife) + minHalflife
         posteriors = lpVector(bs, hs)
-        fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=0.0)
+        fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=weightPower)
       else:
         raise e
 
@@ -310,7 +313,6 @@ def updateRecallHistory(
 
       return dict(gen=gen, logpdf=logpdf)
 
-    unifWeight = 1.0
     xmix = mix(unifWeight,
                lambda size: uniformrv.rvs(size=size, loc=minBoost, scale=maxBoost - minBoost),
                lambda size: gammarv.rvs(fit['alphax'], scale=1 / fit['betax'], size=size),
@@ -628,6 +630,7 @@ def _monteCarloImprove(generateX: Callable[[int], np.ndarray],
       closedFit=[(alphax, betax), (alphay, betay)] if debug else [],
       maxLikFit=[_weightedGammaEstimateMaxLik(z, w) for z in [x, y]] if debug else [],
       logw=logw,
+      logp=logp,
       xs=x,
       ys=y)
 
