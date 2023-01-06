@@ -255,7 +255,8 @@ def updateRecallHistory(
 
   MIXTURE = True
   # MIXTURE = False
-  unifWeight = 0.5
+  unifWeight = 0.1
+  weightPower = 2
 
   print(f'{MIXTURE=}, {unifWeight=}')
   # print(f'for sharp: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}, {MIXTURE=}')
@@ -283,7 +284,6 @@ def updateRecallHistory(
       bs = bs * (maxBoost - minBoost) + minBoost
       hs = hs * (maxHalflife - minHalflife) + minHalflife
       posteriors = lpVector(bs, hs)
-      weightPower = 2.0
       fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=weightPower)
       print(f'{weightPower=}')
     except AssertionError as e:
@@ -304,7 +304,9 @@ def updateRecallHistory(
         numA = np.sum(np.random.rand(size) < aWeight)
         a = genA(size=numA)
         b = genB(size=size - numA)
-        return np.hstack([a, b])
+        ret = np.hstack([a, b])
+        np.random.shuffle(ret)  # why is this necessary??
+        return ret
 
       def logpdf(x):
         lpA = logpdfA(x)

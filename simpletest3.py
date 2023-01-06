@@ -112,17 +112,43 @@ def set_clim(dynamicRange: int | float, gci=None):
 
 """
 MIXTURE=false
-[0.11329404 0.02260367]
-or
 mean [6.48339345 1.56056942]
 std [0.11329404 0.02260367]
 
+MIXTURE=True, unifWeight=1
+weightPower=0.0
+mean [6.49701033 1.55617411]
+std [0.1301719  0.02569452]
+
+WITH SHUFFLE
+
+MIXTURE=True, unifWeight=0.1
+weightPower=2
+mean [6.48205908 1.56094228]
+std [0.04942927 0.00702538]
+
+MIXTURE=True, unifWeight=0.25
+weightPower=2
+mean [6.49051695 1.56257748]
+std [0.05099051 0.00700811]
+
 MIXTURE=True, unifWeight=0.5
-weightPower=2.0
-mean [5.93231069 1.52162737]
-std [0.05192911 0.00896361]
+weightPower=2
+mean [6.49567787 1.56198629]
+std [0.05496866 0.00890928]
+
+
+MIXTURE=True, unifWeight=0.75
+weightPower=2
+mean [6.48921628 1.56269426]
+std [0.07472302 0.01381985]
+
 
 """
+# for size in [1e3, 10e3, 100e3, 1000e3]:
+#   full, debug = ebisu.updateRecallHistory(upd, size=int(size), debug=True)
+#   print(fullToMean(full))
+
 import pickle
 with open('finalres.pickle', 'rb') as fid:
   data = pickle.load(fid)
@@ -133,10 +159,10 @@ def recon(bs, hs, logps, w=0):
   return (gammaToMean(fit['alphax'], fit['betax']), gammaToMean(fit['alphay'], fit['betay']))
 
 
-if False:
-  import pylab as plt
+import pylab as plt
 
-  plt.ion()
+plt.ion()
+if False:
   better = fulls[0][1]["betterFit"]
 
   plt.figure()
