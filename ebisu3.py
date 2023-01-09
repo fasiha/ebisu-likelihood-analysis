@@ -10,8 +10,10 @@ from time import time_ns
 from functools import cache
 from typing import Union, Callable
 from copy import deepcopy
+from dataclasses_json import dataclass_json
 
 
+@dataclass_json
 @dataclass
 class BinomialResult:
   successes: int
@@ -19,6 +21,7 @@ class BinomialResult:
   hoursElapsed: float
 
 
+@dataclass_json
 @dataclass
 class NoisyBinaryResult:
   result: float
@@ -39,6 +42,7 @@ def success(res: Result) -> bool:
     raise Exception("unknown result type")
 
 
+@dataclass_json
 @dataclass
 class Quiz:
   results: list[list[Result]]
@@ -51,6 +55,7 @@ class Quiz:
   startTimestampMs: list[float]
 
 
+@dataclass_json
 @dataclass
 class Probability:
   # priors: fixed at model creation time
@@ -65,6 +70,7 @@ class Probability:
   # (`updateRecallHistory`), we need to know what to start from.
 
 
+@dataclass_json
 @dataclass
 class Predict:
   # just for developer ease, these can be stored in SQL, etc.
@@ -76,6 +82,7 @@ class Predict:
   # where NOW_MS is milliseconds since Unix epoch.
 
 
+@dataclass_json
 @dataclass
 class Model:
   quiz: Quiz
@@ -353,7 +360,7 @@ def updateRecallHistory(
         hs=hs,
         posteriors=posteriors,
         size=size,
-        initSize = initSize,
+        initSize=initSize,
     )
   return ret
 

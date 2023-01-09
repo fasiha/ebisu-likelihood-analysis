@@ -18,6 +18,8 @@ from copy import deepcopy
 import pickle
 from datetime import datetime
 import mpmath as mp  # type:ignore
+import csv
+import io
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
 weightedGammaEstimate = ebisu._weightedGammaEstimate
@@ -104,6 +106,7 @@ def fullBinomialMonteCarlo(
       kishEffectiveSampleSize=kishEffectiveSampleSize,
       statsBoost=weightedMeanVarLogw(logweights, boosts),
       statsInitHl=weightedMeanVarLogw(logweights, hl0s),
+      size=size,
   )
 
 
@@ -191,10 +194,12 @@ def relativeError(actual: float, expected: float) -> float:
 
 
 results = dict()
+testStartTime = datetime.utcnow().isoformat()
 
 # seed = 29907812
 seed = np.random.randint(1, 1_000_000_000)
 # seed = 708572856  # fails?
+# seed = 473107421 # fails kish?
 print(f'{seed=}')
 
 
@@ -478,6 +483,7 @@ class TestEbisu(unittest.TestCase):
     # simulate a variety of 4-quiz trajectories:
     # for fraction, result, lastNoisy in product([0.1], [0], [True]):
     for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [0, 1], [False, True]):
+      np.random.seed(seed=seed)  # for sanity when testing with Monte Carlo
       thisKey = (fraction, result, lastNoisy)
       results[thisKey] = dict()
       upd = deepcopy(init)
@@ -501,7 +507,7 @@ class TestEbisu(unittest.TestCase):
       # less accurate model but remain confident that the *means* of this posterior
       # are accurate.
       tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(
-          upd, left=left, size=1_00_000, debug=True)
+          upd, left=left, size=1_000_000, debug=True)
       full, fullDebug = tmp
       bEbisuSamplesStats, hEbisuSamplesStats = fullDebug['stats']
 
@@ -522,7 +528,7 @@ class TestEbisu(unittest.TestCase):
       ### Raw Monte Carlo simulation (without max likelihood enhanced proposal)
       # Because this method can be inaccurate and slow, try it with a small number
       # of samples and increase it quickly if we don't meet tolerances.
-      for size in [10_000, 100_000, 1_000_000, 20_000_000]:
+      for size in [1_000_000, 20_000_000]:
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
             init.prob.boostPrior, [r.hoursElapsed for r in upd.quiz.results[-1]],
@@ -545,13 +551,16 @@ class TestEbisu(unittest.TestCase):
       # (a) full Ebisu update and (b) raw Monte Carlo.
       results[thisKey]['mc/initHl/stats'] = mc['statsInitHl']
       results[thisKey]['mc/boost/stats'] = mc['statsBoost']
+      results[thisKey]['mc/size'] = mc['size']
       results[thisKey]['ebisuSamples/initHl/stats'] = hEbisuSamplesStats
-      results[thisKey]['ebisuSamples/initHl/stats'] = hEbisuSamplesStats
+      results[thisKey]['ebisuSamples/boost/stats'] = bEbisuSamplesStats
       results[thisKey]['ebisuSamples/size'] = fullDebug['size']
       results[thisKey]['ebisuSamples/initSize'] = fullDebug['initSize']
       results[thisKey]['ebisuSamples/kish'] = fullDebug['kish']
       results[thisKey]['int/initHl/stats'] = [float(x) for x in hInt]
       results[thisKey]['int/boost/stats'] = [float(x) for x in bInt]
+      results[thisKey]['input'] = upd.to_json()
+      results[thisKey]['output'] = full.to_json()
 
       # Ebisu posterior weighted samples vs numerical integration (nothing to do with Monte Carlo)
       self.assertLessEqual(
@@ -597,10 +606,12 @@ class TestEbisu(unittest.TestCase):
       # check Kish efficiency
       self.assertGreater(fullDebug['kish'], MIN_KISH_EFFICIENCY,
                          f'Ebisu samples Kish efficiency, {fraction=}, {result=}, {lastNoisy=}')
-    with open(f'finalres-{datetime.utcnow().isoformat().replace(":","")}.pickle', 'wb') as fid:
+    pickleName = f'finalres-{datetime.utcnow().isoformat().replace(":","")}.pickle'
+    with open(pickleName, 'wb') as fid:
       results['date'] = datetime.utcnow().isoformat()
       results['seed'] = seed
       pickle.dump(results, fid)
+    pickleToCsv(pickleName)
     return upd
 
 
@@ -631,6 +642,50 @@ def gammaToStats(a: float, b: float):
   t = 1 / b
   m2 = t**2 * k * (k + 1)  # second non-central moment
   return (mean, var, m2, np.sqrt(m2))
+
+
+def pickleToCsv(s: str):
+  with open(s, 'rb') as fid:
+    data = pickle.load(fid)
+
+  output = io.StringIO()
+  writer = None
+  for key in data:
+    if type(key) == tuple:
+      row = data[key]
+      diffs = dict()
+      diffs['desc'] = "/".join([str(e) for e in key])
+      diffs['kish'] = row['ebisuSamples/kish']
+      diffs['ebisu size'] = row['ebisuSamples/size']
+      diffs['mc size'] = row['mc/size']
+
+      eh = relativeError(row['ebisuSamples/initHl/stats'], row['int/initHl/stats'])
+      eb = relativeError(row['ebisuSamples/boost/stats'], row['int/boost/stats'])
+      diffs['ebisuSamples vs int: initHl: mean'] = eh[0]
+      diffs['ei: initHl: m2'] = eh[2]
+      diffs['ei: boost: mean'] = eb[0]
+      diffs['ei: boost: m2'] = eb[2]
+
+      eh = relativeError(row['ebisuSamples/initHl/stats'], row['mc/initHl/stats'])
+      eb = relativeError(row['ebisuSamples/boost/stats'], row['mc/boost/stats'])
+      diffs['ebisuSamples vs mc: initHl: mean'] = eh[0]
+      diffs['em: initHl: m2'] = eh[2]
+      diffs['em: boost: mean'] = eb[0]
+      diffs['em: boost: m2'] = eb[2]
+
+      eh = relativeError(row['int/initHl/stats'], row['mc/initHl/stats'])
+      eb = relativeError(row['int/boost/stats'], row['mc/boost/stats'])
+      diffs['int vs mc: initHl: mean'] = eh[0]
+      diffs['im: initHl: m2'] = eh[2]
+      diffs['im: boost: mean'] = eb[0]
+      diffs['im: boost: m2'] = eb[2]
+
+      if not writer:
+        writer = csv.DictWriter(output, fieldnames=[k for k in diffs])
+        writer.writeheader()
+      writer.writerow(diffs)
+  with open(f'{s}.csv', 'w') as fid2:
+    fid2.write(output.getvalue())
 
 
 if __name__ == '__main__':
