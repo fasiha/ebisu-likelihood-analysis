@@ -251,18 +251,18 @@ def updateRecallHistory(
   lpScalar = lambda b, h: _posterior(b, h, ret, left, right)
   lpVector = np.vectorize(lpScalar, otypes=[float])
 
-  n = 2600
+  initSize = 600
 
   MIXTURE = True
   # MIXTURE = False
   unifWeight = 0.1
   weightPower = 2
 
-  print(f'{MIXTURE=}, {unifWeight=}')
+  # print(f'{MIXTURE=}, {unifWeight=}')
   # print(f'for sharp: b={[minBoost, maxBoost]}, hl={[minHalflife, maxHalflife]}, {MIXTURE=}')
 
   maxBoost, maxHalflife = expand(10, minBoost / 3, minHalflife / 3, maxBoost * 3, maxHalflife * 3,
-                                 n, lpVector)
+                                 initSize, lpVector)
   minBoost = 0
   minHalflife = 0
 
@@ -280,17 +280,17 @@ def updateRecallHistory(
     )
   else:
     try:
-      bs, hs = np.random.rand(2, n)
+      bs, hs = np.random.rand(2, initSize)
       bs = bs * (maxBoost - minBoost) + minBoost
       hs = hs * (maxHalflife - minHalflife) + minHalflife
       posteriors = lpVector(bs, hs)
       fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=weightPower)
-      print(f'{weightPower=}')
+      # print(f'{weightPower=}')
     except AssertionError as e:
       if "positive gamma parameters" in e.args[0]:
         print('something bad happened but trying again:', e)
-        n *= 2
-        bs, hs = np.random.rand(2, n)
+        initSize *= 2
+        bs, hs = np.random.rand(2, initSize)
         bs = bs * (maxBoost - minBoost) + minBoost
         hs = hs * (maxHalflife - minHalflife) + minHalflife
         posteriors = lpVector(bs, hs)
@@ -347,14 +347,13 @@ def updateRecallHistory(
     return ret, dict(
         origfit=fit,
         kish=betterFit['kish'],
-        stds=betterFit['stds'],
         stats=betterFit['stats'],
-        closedFit=betterFit['closedFit'],
-        maxLikFit=betterFit['maxLikFit'],
         betterFit=betterFit,
         bs=bs,
         hs=hs,
         posteriors=posteriors,
+        size=size,
+        initSize = initSize,
     )
   return ret
 
@@ -627,10 +626,10 @@ def _monteCarloImprove(generateX: Callable[[int], np.ndarray],
       alphay=alphay,
       betay=betay,
       kish=_kishLog(logw) if debug else -1,
-      stds=[np.std(w * v) for v in [x, y]] if debug else [],
+      # stds=[np.std(w * v) for v in [x, y]] if debug else [],
       stats=[_weightedMeanVarLogw(logw, samples) for samples in [x, y]] if debug else [],
       closedFit=[(alphax, betax), (alphay, betay)] if debug else [],
-      maxLikFit=[_weightedGammaEstimateMaxLik(z, w) for z in [x, y]] if debug else [],
+      # maxLikFit=[_weightedGammaEstimateMaxLik(z, w) for z in [x, y]] if debug else [],
       logw=logw,
       logp=logp,
       xs=x,

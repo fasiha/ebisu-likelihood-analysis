@@ -94,9 +94,10 @@ print(f'{seed=}')
 np.random.seed(seed=seed)  # for sanity when testing with Monte Carlo
 
 fulls = []
-for i in range(100):
+for i in range(1):
   print(i)
   tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(upd, debug=True)
+  print(f"{tmp[1]['kish']=}")
   fulls.append(tmp)
 
 fullToMean = lambda full: (gammaToMean(*full.prob.initHl), gammaToMean(*full.prob.boost))
