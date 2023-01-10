@@ -85,11 +85,11 @@ for fraction, result, lastNoisy in product([.1], [0], [False]):
     thisNow += nextElapsed * MILLISECONDS_PER_HOUR
     upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=thisNow)
 
-# seed = np.random.randint(1, 1_000_000_000)
+seed = np.random.randint(1, 1_000_000_000)
 # seed = 498076874 # causes mixture to fail initial fit…?
 # seed = 29907812  #np.random.randint(1, 100_000_000)
 # seed = 708572856  # fails?
-seed = 1234
+# seed = 1234
 print(f'{seed=}')
 np.random.seed(seed=seed)  # for sanity when testing with Monte Carlo
 
@@ -98,6 +98,16 @@ for i in range(1):
   print(i)
   tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(upd, debug=True)
   print(f"{tmp[1]['kish']=}")
+  bMom, hMom = [
+      (stats[0]**2 / stats[1], stats[0] / stats[1]) for stats in tmp[1]["betterFit"]["stats"]
+  ]
+  tmp[1]['bMom'] = bMom
+  tmp[1]['hMom'] = hMom
+  w = np.exp(tmp[1]['betterFit']['logw'])
+  bMl = ebisu._weightedGammaEstimateMaxLik(tmp[1]['betterFit']['xs'], w)
+  hMl = ebisu._weightedGammaEstimateMaxLik(tmp[1]['betterFit']['ys'], w)
+  tmp[1]['bMl'] = bMl
+  tmp[1]['hMl'] = hMl
   fulls.append(tmp)
 
 fullToMean = lambda full: (gammaToMean(*full.prob.initHl), gammaToMean(*full.prob.boost))
@@ -163,6 +173,17 @@ def recon(bs, hs, logps, w=0):
 import pylab as plt
 
 plt.ion()
+
+x = np.linspace(0, 25, 1001)
+plt.figure()
+plt.plot(
+    x,
+    gammarv.pdf(x, fulls[0][0].prob.initHl[0], scale=1 / fulls[0][0].prob.initHl[1]),
+    label='mixed mode')
+plt.plot(x, gammarv.pdf(x, tmp[1]['hMl'][0], scale=1 / tmp[1]['hMl'][1]), label='max lik')
+plt.plot(x, gammarv.pdf(x, tmp[1]['hMom'][0], scale=1 / tmp[1]['hMom'][1]), label='mom')
+plt.legend()
+plt.ylim([0, .12])
 if False:
   better = fulls[0][1]["betterFit"]
 

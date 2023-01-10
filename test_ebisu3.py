@@ -506,8 +506,8 @@ class TestEbisu(unittest.TestCase):
       # Ebisu posterior Gamma fit vs Ebisu posterior samples (nothing to do with Monte Carlo)
       bEbisu = gammaToStats(*full.prob.boost)
       hEbisu = gammaToStats(*full.prob.initHl)
-      # print('ebisu samples vs Gamma fit: boost', relativeError(bEbisuSamplesStats, bEbisu))
-      # print('  ebisu samples vs Gamma fit: hl', relativeError(hEbisuSamplesStats, hEbisu))
+      print('ebisu samples vs Gamma fit: boost', relativeError(bEbisuSamplesStats, bEbisu))
+      print('  ebisu samples vs Gamma fit: hl', relativeError(hEbisuSamplesStats, hEbisu))
       self.assertLessEqual(
           max(
               relativeError(bEbisuSamplesStats[0], bEbisu[0]),
