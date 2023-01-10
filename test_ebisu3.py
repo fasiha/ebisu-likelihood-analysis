@@ -21,12 +21,45 @@ import mpmath as mp  # type:ignore
 import csv
 import io
 
+results = dict()
+testStartTime = datetime.utcnow().isoformat()
+
+seed = np.random.randint(1, 1_000_000_000)
+# seed = 4285664  # AssertionError: mpf('0.0016341028981582755') not less than or equal to 0.001 : mean(ebisu posterior samples) = numerical integral mean, fraction=0.1, result=0, lastNoisy=True
+print(f'{seed=}')
+
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
-weightedGammaEstimate = ebisu._weightedGammaEstimate
 weightedMeanVarLogw = ebisu._weightedMeanVarLogw
 
 
-def numericalIntegration(upd: ebisu.Model, maxdegree: int, left=0.3, right=1.0):
+def fourQuiz(fraction: float, result: int, lastNoisy: bool):
+  initHlMean = 10  # hours
+  initHlBeta = 0.1
+  initHlPrior = (initHlBeta * initHlMean, initHlBeta)
+
+  boostMean = 1.5
+  boostBeta = 3.0
+  boostPrior = (boostBeta * boostMean, boostBeta)
+
+  now = ebisu._timeMs()
+  init = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior, now=now)
+
+  upd = deepcopy(init)
+  elapsedHours = fraction * initHlMean
+  thisNow = now + elapsedHours * MILLISECONDS_PER_HOUR
+  upd = ebisu.updateRecall(upd, result, now=thisNow)
+
+  for nextResult, nextElapsed, nextTotal in zip(
+      [1, 1, 1 if not lastNoisy else (0.2)],
+      [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
+      [1, 2, 2 if not lastNoisy else 1],
+  ):
+    thisNow += nextElapsed * MILLISECONDS_PER_HOUR
+    upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=thisNow)
+  return init, upd
+
+
+def numericalIntegration(upd: ebisu.Model, maxdegree: int, left=0.3, right=1.0, verbose=False):
 
   @cache
   def posterior2d(b, h):
@@ -61,6 +94,8 @@ def numericalIntegration(upd: ebisu.Model, maxdegree: int, left=0.3, right=1.0):
   hSecondMoment = res['numh2'] / res['den']
 
   boostVarInt, hl0VarInt = bSecondMoment - boostMeanInt**2, hSecondMoment - hl0MeanInt**2
+  if verbose:
+    print(errs)
   return [(boostMeanInt, boostVarInt, bSecondMoment, mp.sqrt(bSecondMoment)),
           (hl0MeanInt, hl0VarInt, hSecondMoment, mp.sqrt(hSecondMoment))]
 
@@ -191,16 +226,6 @@ def _gammaUpdateNoisyMonteCarlo(
 def relativeError(actual: float, expected: float) -> float:
   e, a = np.array(expected), np.array(actual)
   return np.abs(a - e) / np.abs(e)
-
-
-results = dict()
-testStartTime = datetime.utcnow().isoformat()
-
-# seed = 29907812
-seed = np.random.randint(1, 1_000_000_000)
-# seed = 708572856  # fails?
-# seed = 473107421 # fails kish?
-print(f'{seed=}')
 
 
 class TestEbisu(unittest.TestCase):
@@ -467,37 +492,44 @@ class TestEbisu(unittest.TestCase):
     # by scalar >=1.
     self.assertAlmostEqual(m(s.prob.initHl), s.pred.currentHalflifeHours)
 
+  def test_ebisu_samples_vs_fit(self):
+    left = 0.3
+    MEAN_ERR = 0.01
+    M2_ERR = 0.02
+    # simulate a variety of 4-quiz trajectories:
+    for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [0, 1], [False, True]):
+      _init, upd = fourQuiz(fraction, result, lastNoisy)
+      tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(upd, left=left, debug=True)
+      full, fullDebug = tmp
+      bEbisuSamplesStats, hEbisuSamplesStats = fullDebug['stats']
+
+      # Ebisu posterior Gamma fit vs Ebisu posterior samples (nothing to do with Monte Carlo)
+      bEbisu = gammaToStats(*full.prob.boost)
+      hEbisu = gammaToStats(*full.prob.initHl)
+      # print('ebisu samples vs Gamma fit: boost', relativeError(bEbisuSamplesStats, bEbisu))
+      # print('  ebisu samples vs Gamma fit: hl', relativeError(hEbisuSamplesStats, hEbisu))
+      self.assertLessEqual(
+          max(
+              relativeError(bEbisuSamplesStats[0], bEbisu[0]),
+              relativeError(hEbisuSamplesStats[0], hEbisu[0])), MEAN_ERR,
+          f'mean(ebisu posterior samples) = mean(ebisu Gamma fit), {fraction=}, {result=}, {lastNoisy=}'
+      )
+      # # FIXME TODO why is sometimes 2nd moment so bad between posterior samples and fit?
+      # self.assertLessEqual(
+      #     max(
+      #         relativeError(bEbisuSamplesStats[2], bEbisu[2]),
+      #         relativeError(hEbisuSamplesStats[2], hEbisu[2])), M2_ERR,
+      #     f'2nd moment(ebisu posterior samples) = 2nd moment(ebisu Gamma fit), {fraction=}, {result=}, {lastNoisy=}'
+      # )
+
   def test_full(self, verbose=True):
-    initHlMean = 10  # hours
-    initHlBeta = 0.1
-    initHlPrior = (initHlBeta * initHlMean, initHlBeta)
-
-    boostMean = 1.5
-    boostBeta = 3.0
-    boostPrior = (boostBeta * boostMean, boostBeta)
-
-    now = ebisu._timeMs()
-    init = ebisu.initModel(initHlPrior=initHlPrior, boostPrior=boostPrior, now=now)
-
     left = 0.3
     # simulate a variety of 4-quiz trajectories:
-    # for fraction, result, lastNoisy in product([0.1], [0], [True]):
     for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [0, 1], [False, True]):
       np.random.seed(seed=seed)  # for sanity when testing with Monte Carlo
       thisKey = (fraction, result, lastNoisy)
       results[thisKey] = dict()
-      upd = deepcopy(init)
-      elapsedHours = fraction * initHlMean
-      thisNow = now + elapsedHours * MILLISECONDS_PER_HOUR
-      upd = ebisu.updateRecall(upd, result, now=thisNow)
-
-      for nextResult, nextElapsed, nextTotal in zip(
-          [1, 1, 1 if not lastNoisy else (0.2)],
-          [elapsedHours * 3, elapsedHours * 5, elapsedHours * 7],
-          [1, 2, 2 if not lastNoisy else 1],
-      ):
-        thisNow += nextElapsed * MILLISECONDS_PER_HOUR
-        upd = ebisu.updateRecall(upd, nextResult, total=nextTotal, q0=0.05, now=thisNow)
+      init, upd = fourQuiz(fraction, result, lastNoisy)
 
       ### Full Ebisu update (max-likelihood to enhanced Monte Carlo proposal)
       # This many samples is probably WAY TOO MANY for practical purposes but
@@ -511,24 +543,32 @@ class TestEbisu(unittest.TestCase):
       full, fullDebug = tmp
       bEbisuSamplesStats, hEbisuSamplesStats = fullDebug['stats']
 
+      MEAN_ERR = 0.01
+      M2_ERR = 0.02
+      MIN_KISH_EFFICIENCY = 0.5  # between 0 and 1, higher is better
+
       ### Numerical integration via mpmath
       # This method stops being accurate when you have tens of quizzes but it's matches
       # the other methods well for ~4. It also can only compute posterior moments.
       bInt, hInt = numericalIntegration(upd, 6, left=left)
-
-      MEAN_ERR = 0.01
-      M2_ERR_BINOMIAL = 0.02
-      M2_ERR_NOISY = 0.05
-      M2_ERR = M2_ERR_NOISY if lastNoisy else M2_ERR_BINOMIAL
-      MIN_KISH_EFFICIENCY = 0.5  # between 0 and 1, higher is better
-      M2_FIT_ERR = 0.05
-      # TRUE_POST_VAR_ERR = 0.01
-      # FIT_VAR_ERR = 0.05
+      # Ebisu posterior weighted samples vs numerical integration (nothing to do with Monte Carlo)
+      self.assertLessEqual(
+          max(
+              relativeError(bEbisuSamplesStats[0], bInt[0]),
+              relativeError(hEbisuSamplesStats[0], hInt[0])), MEAN_ERR / 5,
+          f'mean(ebisu posterior samples) = numerical integral mean, {fraction=}, {result=}, {lastNoisy=}'
+      )
+      self.assertLessEqual(
+          max(
+              relativeError(bEbisuSamplesStats[2], bInt[2]),
+              relativeError(hEbisuSamplesStats[2], hInt[2])), M2_ERR / 5,
+          f'2nd moment(ebisu posterior samples) = numerical integral 2nd moment, {fraction=}, {result=}, {lastNoisy=}'
+      )
 
       ### Raw Monte Carlo simulation (without max likelihood enhanced proposal)
       # Because this method can be inaccurate and slow, try it with a small number
       # of samples and increase it quickly if we don't meet tolerances.
-      for size in [1_000_000, 20_000_000]:
+      for size in [200_000, 1_000_000, 20_000_000]:
         mc = fullBinomialMonteCarlo(
             init.prob.initHlPrior,
             init.prob.boostPrior, [r.hoursElapsed for r in upd.quiz.results[-1]],
@@ -561,37 +601,6 @@ class TestEbisu(unittest.TestCase):
       results[thisKey]['int/boost/stats'] = [float(x) for x in bInt]
       results[thisKey]['input'] = upd.to_json()
       results[thisKey]['output'] = full.to_json()
-
-      # Ebisu posterior weighted samples vs numerical integration (nothing to do with Monte Carlo)
-      self.assertLessEqual(
-          max(
-              relativeError(bEbisuSamplesStats[0], bInt[0]),
-              relativeError(hEbisuSamplesStats[0], hInt[0])), MEAN_ERR,
-          f'mean(ebisu posterior samples) = numerical integral mean, {fraction=}, {result=}, {lastNoisy=}'
-      )
-      self.assertLessEqual(
-          max(
-              relativeError(bEbisuSamplesStats[2], bInt[2]),
-              relativeError(hEbisuSamplesStats[2], hInt[2])), M2_ERR,
-          f'2nd moment(ebisu posterior samples) = numerical integral 2nd moment, {fraction=}, {result=}, {lastNoisy=}'
-      )
-
-      # Ebisu posterior Gamma fit vs Ebisu posterior samples (nothing to do with Monte Carlo)
-      bEbisu = gammaToStats(*full.prob.boost)
-      hEbisu = gammaToStats(*full.prob.initHl)
-      self.assertLessEqual(
-          max(
-              relativeError(bEbisuSamplesStats[0], bEbisu[0]),
-              relativeError(hEbisuSamplesStats[0], hEbisu[0])), MEAN_ERR,
-          f'mean(ebisu posterior samples) = mean(ebisu Gamma fit), {fraction=}, {result=}, {lastNoisy=}'
-      )
-      # FIXME TODO why is sometimes 2nd moment so bad between posterior samples and fit?
-      # self.assertLessEqual(
-      #     max(
-      #         relativeError(bEbisuSamplesStats[2], bEbisu[2]),
-      #         relativeError(hEbisuSamplesStats[2], hEbisu[2])), M2_FIT_ERR,
-      #     f'2nd moment(ebisu posterior samples) = 2nd moment(ebisu Gamma fit), {fraction=}, {result=}, {lastNoisy=}'
-      # )
 
       # Finally get to Monte Carlo
       self.assertLess(
