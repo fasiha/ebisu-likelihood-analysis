@@ -498,9 +498,10 @@ class TestEbisu(unittest.TestCase):
     # simulate a variety of 4-quiz trajectories:
     for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [0, 1], [False, True]):
       _init, upd = fourQuiz(fraction, result, lastNoisy)
-      tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(upd, left=left, debug=True)
-      full, fullDebug = tmp
-      bEbisuSamplesStats, hEbisuSamplesStats = fullDebug['stats']
+      full, fullDebug = ebisu._updateRecallHistoryDebug(upd, left=left)
+      fullDebug = enrichDebug(fullDebug)
+      bEbisuSamplesStats = fullDebug['bEbisuSamplesStats']
+      hEbisuSamplesStats = fullDebug['hEbisuSamplesStats']
 
       # Ebisu posterior Gamma fit vs Ebisu posterior samples (nothing to do with Monte Carlo)
       bEbisu = gammaToStats(*full.prob.boost)
@@ -534,10 +535,11 @@ class TestEbisu(unittest.TestCase):
       # correctly, we can in practice use 1_000 or 10_000 samples and accept a
       # less accurate model but remain confident that the *means* of this posterior
       # are accurate.
-      tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(
-          upd, left=left, size=1_000_000, debug=True)
-      full, fullDebug = tmp
-      bEbisuSamplesStats, hEbisuSamplesStats = fullDebug['stats']
+      full, fullDebug = ebisu._updateRecallHistoryDebug(upd, left=left, size=1_000_000)
+      fullDebug = enrichDebug(fullDebug)
+      kish = fullDebug['kish']
+      bEbisuSamplesStats = fullDebug['bEbisuSamplesStats']
+      hEbisuSamplesStats = fullDebug['hEbisuSamplesStats']
 
       MEAN_ERR = 0.01
       M2_ERR = 0.02
@@ -591,8 +593,8 @@ class TestEbisu(unittest.TestCase):
       results[thisKey]['ebisuSamples/initHl/stats'] = hEbisuSamplesStats
       results[thisKey]['ebisuSamples/boost/stats'] = bEbisuSamplesStats
       results[thisKey]['ebisuSamples/size'] = fullDebug['size']
-      results[thisKey]['ebisuSamples/initSize'] = fullDebug['initSize']
-      results[thisKey]['ebisuSamples/kish'] = fullDebug['kish']
+      results[thisKey]['ebisuSamples/likelihoodFitSize'] = fullDebug['likelihoodFitSize']
+      results[thisKey]['ebisuSamples/kish'] = kish
       results[thisKey]['int/initHl/stats'] = [float(x) for x in hInt]
       results[thisKey]['int/boost/stats'] = [float(x) for x in bInt]
       results[thisKey]['input'] = upd.to_json()
@@ -609,7 +611,7 @@ class TestEbisu(unittest.TestCase):
       )
 
       # check Kish efficiency
-      self.assertGreater(fullDebug['kish'], MIN_KISH_EFFICIENCY,
+      self.assertGreater(kish, MIN_KISH_EFFICIENCY,
                          f'Ebisu samples Kish efficiency, {fraction=}, {result=}, {lastNoisy=}')
     pickleName = f'finalres-{datetime.utcnow().isoformat().replace(":","")}.pickle'
     with open(pickleName, 'wb') as fid:
@@ -691,6 +693,19 @@ def pickleToCsv(s: str):
       writer.writerow(diffs)
   with open(f'{s}.csv', 'w') as fid2:
     fid2.write(output.getvalue())
+
+
+def kishLog(logweights) -> float:
+  "kish effective sample fraction, given log-weights"
+  return np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / logweights.size
+
+
+def enrichDebug(fullDebug):
+  logw = fullDebug['betterFit']['logw']
+  fullDebug['kish'] = kishLog(logw)
+  fullDebug['bEbisuSamplesStats'] = ebisu._weightedMeanVarLogw(logw, fullDebug['betterFit']['xs'])
+  fullDebug['hEbisuSamplesStats'] = ebisu._weightedMeanVarLogw(logw, fullDebug['betterFit']['ys'])
+  return fullDebug
 
 
 if __name__ == '__main__':
