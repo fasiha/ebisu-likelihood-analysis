@@ -203,8 +203,8 @@ def updateRecall(
   return ret
 
 
-def expand(thresh: float, minBoost: float, minHalflife: float, maxBoost: float, maxHalflife: float,
-           n: int, lpVector):
+def _expand(thresh: float, minBoost: float, minHalflife: float, maxBoost: float, maxHalflife: float,
+            n: int, lpVector):
   bvec = np.linspace(minBoost, maxBoost, int(np.sqrt(n)))
   hvec = np.linspace(minHalflife, maxHalflife, int(np.sqrt(n)))
   bs, hs = np.meshgrid(bvec, hvec)
@@ -221,82 +221,83 @@ def _updateRecallHistoryDebug(model: Model,
                               left=0.3,
                               right=1.0,
                               size=10_000,
-                              likelihoodFitWeigth=0.9,
+                              likelihoodFitWeight=0.9,
                               likelihoodFitPower=2,
                               likelihoodFitSize=600) -> tuple[Model, dict]:
   ret = deepcopy(model)
   if len(ret.quiz.results[-1]) <= 2:
     # not enough quizzes to update boost
     return (ret, dict())
+
+  assert likelihoodFitPower >= 0, "likelihoodFitPower non-negative"
+  assert likelihoodFitSize > 0, "likelihoodFitSize positive"
+  assert 0 < likelihoodFitWeight <= 1, "likelihoodFitWeight between 0 and 1"
+  unifWeight = 1 - likelihoodFitWeight
+
+  lpVector = np.vectorize(lambda b, h: _posterior(b, h, ret, left, right), otypes=[float])
+
   ab, bb = ret.prob.boostPrior
   ah, bh = ret.prob.initHlPrior
-  minBoost, maxBoost = gammarv.ppf([.01, 0.9999], ab, scale=1.0 / bb)
-  minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1.0 / bh)
-
-  lpScalar = lambda b, h: _posterior(b, h, ret, left, right)
-  lpVector = np.vectorize(lpScalar, otypes=[float])
-
-  unifWeight = 1 - likelihoodFitWeigth
-
-  maxBoost, maxHalflife = expand(10, minBoost / 3, minHalflife / 3, maxBoost * 3, maxHalflife * 3,
-                                 likelihoodFitSize, lpVector)
+  # Look at the prior for rough min/max
+  minBoost, maxBoost = gammarv.ppf([0.01, 0.9999], ab, scale=1 / bb)
+  minHalflife, maxHalflife = gammarv.ppf([0.01, 0.9999], ah, scale=1 / bh)
+  # and then use those to get the posterior's bulk of the posterior's support
+  maxBoost, maxHalflife = _expand(10, minBoost / 3, minHalflife / 3, maxBoost * 3, maxHalflife * 3,
+                                  likelihoodFitSize, lpVector)
   minBoost = 0
   minHalflife = 0
 
+  def generatePosteriorSurface(bMinmax, hMinmax, f, size):
+    bs, hs = np.random.rand(2, size)
+    bs = bs * (bMinmax[1] - bMinmax[0]) + bMinmax[0]
+    hs = hs * (hMinmax[1] - hMinmax[0]) + hMinmax[0]
+    zs = f(bs, hs)
+    return bs, hs, zs
+
   try:
-    bs, hs = np.random.rand(2, likelihoodFitSize)
-    bs = bs * (maxBoost - minBoost) + minBoost
-    hs = hs * (maxHalflife - minHalflife) + minHalflife
-    posteriors = lpVector(bs, hs)
+    bs, hs, posteriors = generatePosteriorSurface([minBoost, maxBoost], [minHalflife, maxHalflife],
+                                                  lpVector, likelihoodFitSize)
     fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=likelihoodFitPower)
   except AssertionError as e:
     if "positive gamma parameters" in e.args[0]:
-      print('something bad happened but trying again:', e)
+      print('posterior fit failed but trying with more samples:', e)
       likelihoodFitSize *= 2
 
-      bs, hs = np.random.rand(2, likelihoodFitSize)
-      bs = bs * (maxBoost - minBoost) + minBoost
-      hs = hs * (maxHalflife - minHalflife) + minHalflife
-      posteriors = lpVector(bs, hs)
+      bs, hs, posteriors = generatePosteriorSurface([minBoost, maxBoost],
+                                                    [minHalflife, maxHalflife], lpVector,
+                                                    likelihoodFitSize)
       fit = _fitJointToTwoGammas(bs, hs, posteriors, weightPower=likelihoodFitPower)
     else:
       raise e
 
-  def mix(aWeight, genA, genB, logpdfA, logpdfB):
+  def mix(aWeight, aComponent, bComponent):
 
     def gen(size: int):
       numA = np.sum(np.random.rand(size) < aWeight)
-      a = genA(size=numA)
-      b = genB(size=size - numA)
+      a = aComponent.rvs(size=numA)
+      b = bComponent.rvs(size=size - numA)
       ret = np.hstack([a, b])
-      np.random.shuffle(ret)  # why is this necessary??
+      np.random.shuffle(ret)
       return ret
 
     def logpdf(x):
-      lpA = logpdfA(x)
-      lpB = logpdfB(x)
+      lpA = aComponent.logpdf(x)
+      lpB = bComponent.logpdf(x)
       return logsumexp(np.vstack([lpA, lpB]), axis=0, b=np.array([[aWeight, 1 - aWeight]]).T)
 
     return dict(gen=gen, logpdf=logpdf)
 
-  xmix = mix(unifWeight,
-             lambda size: uniformrv.rvs(size=size, loc=minBoost, scale=maxBoost - minBoost),
-             lambda size: gammarv.rvs(fit['alphax'], scale=1 / fit['betax'], size=size),
-             lambda x: uniformrv.logpdf(x, loc=minBoost, scale=maxBoost - minBoost),
-             lambda x: gammarv.logpdf(x, fit['alphax'], scale=1 / fit['betax']))
-  ymix = mix(
-      unifWeight,
-      lambda size: uniformrv.rvs(size=size, loc=minHalflife, scale=maxHalflife - minHalflife),
-      lambda size: gammarv.rvs(fit['alphay'], scale=1 / fit['betay'], size=size),
-      lambda x: uniformrv.logpdf(x, loc=minHalflife, scale=maxHalflife - minHalflife),
-      lambda x: gammarv.logpdf(x, fit['alphay'], scale=1 / fit['betay']))
+  xmix = mix(unifWeight, uniformrv(loc=minBoost, scale=maxBoost - minBoost),
+             gammarv(fit['alphax'], scale=1 / fit['betax']))
+  ymix = mix(unifWeight, uniformrv(loc=minHalflife, scale=maxHalflife - minHalflife),
+             gammarv(fit['alphay'], scale=1 / fit['betay']))
 
   betterFit = _monteCarloImprove(
       generateX=xmix['gen'],
       generateY=ymix['gen'],
       logpdfX=xmix['logpdf'],
       logpdfY=ymix['logpdf'],
-      logposterior=lpScalar,
+      logposterior=lpVector,
       size=size,
   )
   # update prior(s)
@@ -568,12 +569,11 @@ def _monteCarloImprove(generateX: Callable[[int], np.ndarray],
                        generateY: Callable[[int], np.ndarray],
                        logpdfX: Callable[[np.ndarray], np.ndarray],
                        logpdfY: Callable[[np.ndarray], np.ndarray],
-                       logposterior: Callable[[float, float], float],
+                       logposterior: Callable,
                        size=10_000):
   x = generateX(size)
   y = generateY(size)
-  f = np.vectorize(logposterior, otypes=[float])
-  logp = f(x, y)
+  logp = logposterior(x, y)
   logw = logp - (logpdfX(x) + logpdfY(y))
   w = np.exp(logw)
   alphax, betax = _weightedGammaEstimate(x, w)
