@@ -309,8 +309,6 @@ def _updateRecallHistoryDebug(model: Model,
   ret.pred.currentHalflifeHours = extra['currentHalflife']
   return ret, dict(
       origfit=fit,
-      # kish=betterFit['kish'],
-      # stats=betterFit['stats'],
       betterFit=betterFit,
       bs=bs,
       hs=hs,
@@ -538,6 +536,15 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
                          y: Union[list[float], np.ndarray],
                          logPosterior: Union[list[float], np.ndarray],
                          weightPower=0.0) -> dict:
+  """Fit two independent Gammas from samples and log-likelihood
+
+  This is a fast linear system of equations that fits five parameters (two for
+  each Gamma, and one offset).
+
+  `weightPower` can be used to scale the system to give more importance to
+  higher likelihoods. Zero, the default, will not scale it. 1 and 2 are
+  reasonable alternatives.
+  """
   # four-dimensional weighted least squares
   x = np.array(x)
   y = np.array(y)
@@ -545,9 +552,10 @@ def _fitJointToTwoGammas(x: Union[list[float], np.ndarray],
   assert x.size == y.size
   assert x.size == logPosterior.size
 
+  # If `N = x.size`, $A$ is N by 5.
   A = np.vstack([np.log(x), -x, np.log(y), -y, np.ones_like(x)]).T
-  weights = np.diag(np.exp(logPosterior - np.max(logPosterior))**weightPower)
-  sol = lstsq(np.dot(weights, A), np.dot(weights, logPosterior))
+  weights = np.exp((logPosterior - np.max(logPosterior)) * weightPower)
+  sol = lstsq(A * weights[:, np.newaxis], weights * logPosterior)
   t = sol[0]
   alphax = t[0] + 1
   betax = t[1]
@@ -667,3 +675,16 @@ def _predictRecallBayesian(model: Model, now: Union[float, None] = None, logDoma
 
 def gammaToMode(a, b):
   return (a - b) / b if a >= 1 else 0
+
+
+def _enrichDebug(fullDebug):
+  logw = fullDebug['betterFit']['logw']
+  fullDebug['kish'] = _kishLog(logw)
+  fullDebug['bEbisuSamplesStats'] = _weightedMeanVarLogw(logw, fullDebug['betterFit']['xs'])
+  fullDebug['hEbisuSamplesStats'] = _weightedMeanVarLogw(logw, fullDebug['betterFit']['ys'])
+  return fullDebug
+
+
+def _kishLog(logweights) -> float:
+  "kish effective sample fraction, given log-weights"
+  return np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / logweights.size

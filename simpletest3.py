@@ -96,11 +96,11 @@ np.random.seed(seed=seed)  # for sanity when testing with Monte Carlo
 fulls = []
 for i in range(1):
   print(i)
-  tmp: tuple[ebisu.Model, dict] = ebisu.updateRecallHistory(upd, debug=True)
+  tmp: tuple[ebisu.Model, dict] = ebisu._updateRecallHistoryDebug(upd)
+  tmp = (tmp[0], ebisu._enrichDebug(tmp[1]))
   print(f"{tmp[1]['kish']=}")
-  bMom, hMom = [
-      (stats[0]**2 / stats[1], stats[0] / stats[1]) for stats in tmp[1]["betterFit"]["stats"]
-  ]
+  bMom, hMom = [(stats[0]**2 / stats[1], stats[0] / stats[1])
+                for stats in [tmp[1]['bEbisuSamplesStats'], tmp[1]['hEbisuSamplesStats']]]
   tmp[1]['bMom'] = bMom
   tmp[1]['hMom'] = hMom
   w = np.exp(tmp[1]['betterFit']['logw'])

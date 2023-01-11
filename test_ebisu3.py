@@ -499,7 +499,7 @@ class TestEbisu(unittest.TestCase):
     for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [0, 1], [False, True]):
       _init, upd = fourQuiz(fraction, result, lastNoisy)
       full, fullDebug = ebisu._updateRecallHistoryDebug(upd, left=left)
-      fullDebug = enrichDebug(fullDebug)
+      fullDebug = ebisu._enrichDebug(fullDebug)
       bEbisuSamplesStats = fullDebug['bEbisuSamplesStats']
       hEbisuSamplesStats = fullDebug['hEbisuSamplesStats']
 
@@ -536,7 +536,7 @@ class TestEbisu(unittest.TestCase):
       # less accurate model but remain confident that the *means* of this posterior
       # are accurate.
       full, fullDebug = ebisu._updateRecallHistoryDebug(upd, left=left, size=1_000_000)
-      fullDebug = enrichDebug(fullDebug)
+      fullDebug = ebisu._enrichDebug(fullDebug)
       kish = fullDebug['kish']
       bEbisuSamplesStats = fullDebug['bEbisuSamplesStats']
       hEbisuSamplesStats = fullDebug['hEbisuSamplesStats']
@@ -695,17 +695,6 @@ def pickleToCsv(s: str):
     fid2.write(output.getvalue())
 
 
-def kishLog(logweights) -> float:
-  "kish effective sample fraction, given log-weights"
-  return np.exp(2 * logsumexp(logweights) - logsumexp(2 * logweights)) / logweights.size
-
-
-def enrichDebug(fullDebug):
-  logw = fullDebug['betterFit']['logw']
-  fullDebug['kish'] = kishLog(logw)
-  fullDebug['bEbisuSamplesStats'] = ebisu._weightedMeanVarLogw(logw, fullDebug['betterFit']['xs'])
-  fullDebug['hEbisuSamplesStats'] = ebisu._weightedMeanVarLogw(logw, fullDebug['betterFit']['ys'])
-  return fullDebug
 
 
 if __name__ == '__main__':
