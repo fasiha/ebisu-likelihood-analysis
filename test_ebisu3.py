@@ -25,7 +25,6 @@ results = dict()
 testStartTime = datetime.utcnow().isoformat()
 
 seed = np.random.randint(1, 1_000_000_000)
-# seed = 4285664  # AssertionError: mpf('0.0016341028981582755') not less than or equal to 0.001 : mean(ebisu posterior samples) = numerical integral mean, fraction=0.1, result=0, lastNoisy=True
 print(f'{seed=}')
 
 MILLISECONDS_PER_HOUR = 3600e3  # 60 min/hour * 60 sec/min * 1e3 ms/sec
@@ -495,7 +494,7 @@ class TestEbisu(unittest.TestCase):
   def test_ebisu_samples_vs_fit(self):
     left = 0.3
     MEAN_ERR = 0.01
-    M2_ERR = 0.02
+    M2_ERR = 0.2
     # simulate a variety of 4-quiz trajectories:
     for fraction, result, lastNoisy in product([0.1, 0.5, 1.5, 9.5], [0, 1], [False, True]):
       _init, upd = fourQuiz(fraction, result, lastNoisy)
@@ -506,21 +505,18 @@ class TestEbisu(unittest.TestCase):
       # Ebisu posterior Gamma fit vs Ebisu posterior samples (nothing to do with Monte Carlo)
       bEbisu = gammaToStats(*full.prob.boost)
       hEbisu = gammaToStats(*full.prob.initHl)
-      print('ebisu samples vs Gamma fit: boost', relativeError(bEbisuSamplesStats, bEbisu))
-      print('  ebisu samples vs Gamma fit: hl', relativeError(hEbisuSamplesStats, hEbisu))
       self.assertLessEqual(
           max(
               relativeError(bEbisuSamplesStats[0], bEbisu[0]),
               relativeError(hEbisuSamplesStats[0], hEbisu[0])), MEAN_ERR,
           f'mean(ebisu posterior samples) = mean(ebisu Gamma fit), {fraction=}, {result=}, {lastNoisy=}'
       )
-      # # FIXME TODO why is sometimes 2nd moment so bad between posterior samples and fit?
-      # self.assertLessEqual(
-      #     max(
-      #         relativeError(bEbisuSamplesStats[2], bEbisu[2]),
-      #         relativeError(hEbisuSamplesStats[2], hEbisu[2])), M2_ERR,
-      #     f'2nd moment(ebisu posterior samples) = 2nd moment(ebisu Gamma fit), {fraction=}, {result=}, {lastNoisy=}'
-      # )
+      self.assertLessEqual(
+          max(
+              relativeError(bEbisuSamplesStats[2], bEbisu[2]),
+              relativeError(hEbisuSamplesStats[2], hEbisu[2])), M2_ERR,
+          f'2nd moment(ebisu posterior samples) = 2nd moment(ebisu Gamma fit), {fraction=}, {result=}, {lastNoisy=}'
+      )
 
   def test_full(self, verbose=True):
     left = 0.3
