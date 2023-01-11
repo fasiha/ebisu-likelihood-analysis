@@ -614,7 +614,7 @@ def _weightedGammaEstimateMom(h, logw):
   return (mean**2 / var, mean / var)
 
 
-def _weightedGammaEstimate(h, w):
+def _weightedGammaEstimate(h, w, biasCorrected=True):
   """
   See https://en.wikipedia.org/w/index.php?title=Gamma_distribution&oldid=1067698046#Closed-form_estimators
   """
@@ -624,8 +624,7 @@ def _weightedGammaEstimate(h, w):
   t = fsum(h * wlh) / wsum - whsum / wsum * fsum(wlh) / wsum
   k = whsum / wsum / t
 
-  BIAS_CORRECTED = not False
-  if BIAS_CORRECTED:
+  if biasCorrected:
     # this is the bias-corrected form on Wikipedia
     n = len(h)
     t2 = n / (n - 1) * t

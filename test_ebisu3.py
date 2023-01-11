@@ -12,7 +12,7 @@ import unittest
 from scipy.stats import gamma as gammarv, binom as binomrv, bernoulli  # type: ignore
 from scipy.special import logsumexp  # type: ignore
 import numpy as np
-from typing import Optional, Union
+from typing import Optional, Union, Any
 import math
 from copy import deepcopy
 import pickle
@@ -21,7 +21,7 @@ import mpmath as mp  # type:ignore
 import csv
 import io
 
-results = dict()
+results: dict[Union[str, tuple], Any] = dict()
 testStartTime = datetime.utcnow().isoformat()
 
 seed = np.random.randint(1, 1_000_000_000)
@@ -222,7 +222,8 @@ def _gammaUpdateNoisyMonteCarlo(
   return ebisu.GammaUpdate(newA, newB, postMean)
 
 
-def relativeError(actual: float, expected: float) -> float:
+def relativeError(actual: Union[float, np.ndarray],
+                  expected: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
   e, a = np.array(expected), np.array(actual)
   return np.abs(a - e) / np.abs(e)
 
@@ -668,6 +669,7 @@ def pickleToCsv(s: str):
 
       eh = relativeError(row['ebisuSamples/initHl/stats'], row['int/initHl/stats'])
       eb = relativeError(row['ebisuSamples/boost/stats'], row['int/boost/stats'])
+      assert type(eh) == np.ndarray and type(eb) == np.ndarray
       diffs['ebisuSamples vs int: initHl: mean'] = eh[0]
       diffs['ei: initHl: m2'] = eh[2]
       diffs['ei: boost: mean'] = eb[0]
@@ -675,6 +677,7 @@ def pickleToCsv(s: str):
 
       eh = relativeError(row['ebisuSamples/initHl/stats'], row['mc/initHl/stats'])
       eb = relativeError(row['ebisuSamples/boost/stats'], row['mc/boost/stats'])
+      assert type(eh) == np.ndarray and type(eb) == np.ndarray
       diffs['ebisuSamples vs mc: initHl: mean'] = eh[0]
       diffs['em: initHl: m2'] = eh[2]
       diffs['em: boost: mean'] = eb[0]
@@ -682,6 +685,7 @@ def pickleToCsv(s: str):
 
       eh = relativeError(row['int/initHl/stats'], row['mc/initHl/stats'])
       eb = relativeError(row['int/boost/stats'], row['mc/boost/stats'])
+      assert type(eh) == np.ndarray and type(eb) == np.ndarray
       diffs['int vs mc: initHl: mean'] = eh[0]
       diffs['im: initHl: m2'] = eh[2]
       diffs['im: boost: mean'] = eb[0]
@@ -693,8 +697,6 @@ def pickleToCsv(s: str):
       writer.writerow(diffs)
   with open(f'{s}.csv', 'w') as fid2:
     fid2.write(output.getvalue())
-
-
 
 
 if __name__ == '__main__':
